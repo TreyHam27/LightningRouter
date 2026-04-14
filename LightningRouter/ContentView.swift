@@ -14,6 +14,7 @@ struct ContentView: View {
     @AppStorage("lastTargetIP") private var targetIP: String = "1.1.1.1"
     @State private var threadKiller: OpaquePointer? = nil
     @State private var connectionStatus: String = "Disconnected"
+    @State private var audioPlayer: AVAudioPlayer? = nil
 
     var body: some View {
         VStack(spacing: 20) {
@@ -54,10 +55,12 @@ struct ContentView: View {
                 threadKiller = nil
                 connectionStatus = "Disconnected"
                 UIApplication.shared.isIdleTimerDisabled = false
+                audioPlayer?.stop()
+                audioPlayer = nil
             }
 
             if newValue {
-                enableBackgroundAudioTrick()
+                audioPlayer = enableBackgroundAudioTrick()
                 let cAddress = strdup(targetIP)
                 let success = start_simple_udp_proxy(cAddress, 51820, &threadKiller)
                 free(cAddress)
@@ -75,7 +78,8 @@ struct ContentView: View {
 }
 
 
-func enableBackgroundAudioTrick() {
+@discardableResult
+func enableBackgroundAudioTrick() -> AVAudioPlayer? {
     let session = AVAudioSession.sharedInstance()
     do {
         try session.setCategory(.playback, mode: .default)
@@ -86,8 +90,10 @@ func enableBackgroundAudioTrick() {
         player.numberOfLoops = -1
         player.volume = 0
         player.play()
+        return player
     } catch {
         print("Failed to enable background audio: \(error)")
+        return nil
     }
 }
 
