@@ -7,14 +7,16 @@
 
 import SwiftUI
 import LightningRouterRS
-import AVFoundation
 
 struct ContentView: View {
     @State private var plsEnable = false
     @AppStorage("lastTargetIP") private var targetIP: String = "1.1.1.1"
+    @AppStorage("lastTargetPort") private var targetPort: Int = 51820
+    @AppStorage("backgroundMode") var backgroundMode: BackgroundService.Mode = .audio
+    @AppStorage("showLocationIndicator") var showIndicator: Bool = true
+    @State var backgroundService: BackgroundService = BackgroundService()
     @State private var threadKiller: OpaquePointer? = nil
     @State private var connectionStatus: String = "Disconnected"
-    @State private var audioPlayer: AVAudioPlayer? = nil
 
     var body: some View {
         VStack(spacing: 20) {
@@ -28,16 +30,52 @@ struct ContentView: View {
                 .font(.title2)
                 .bold()
 
-            TextField("Enter IP address", text: $targetIP)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .padding(.horizontal)
-                .disableAutocorrection(true)
-                .autocapitalization(.none)
+            HStack {
+                TextField("IP address", text: $targetIP)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .padding(.horizontal)
+                    .disableAutocorrection(true)
+                    .autocapitalization(.none)
+
+                TextField("Port", value: $targetPort, format: .number.grouping(.never))
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .padding(.horizontal)
+                    .disableAutocorrection(true)
+                    .autocapitalization(.none)
+                    .keyboardType(.numberPad)
+                    .onChange(of: targetPort) { oldPort, newPort in
+                        if newPort < 1 || newPort > 65535 {
+                            targetPort = oldPort
+                        }
+                    }
+            }
 
             Toggle(isOn: $plsEnable) {
                 Text("Enable Tunnel")
             }
             .padding(.horizontal)
+
+            if backgroundMode == .location {
+                Toggle(isOn: $showIndicator) {
+                    Text("Location Indicator")
+                }
+                .padding(.horizontal)
+            }
+
+            Picker("Background Mode", selection: $backgroundMode) {
+                ForEach(BackgroundService.Mode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+            .buttonStyle(.bordered)
+            .onChange(of: backgroundMode) { oldMode, newMode in
+                Task {
+                    if !(await backgroundService.applyMode(newMode)) {
+                        connectionStatus = "Error: Failed to set background mode"
+                    }
+                }
+            }
 
             Text("Status: \(connectionStatus)")
                 .foregroundColor(plsEnable ? .green : .secondary)
@@ -46,8 +84,13 @@ struct ContentView: View {
 
             Spacer()
         }
+        .onAppear {
+            Task {
+                await backgroundService.applyMode(backgroundMode)
+            }
+        }
         .padding()
-        .onChange(of: plsEnable) { newValue in
+        .onChange(of: plsEnable) { oldValue, newValue in
             print("Tunnel changed: \(newValue), IP: \(targetIP)")
 
             if threadKiller != nil {
@@ -55,45 +98,25 @@ struct ContentView: View {
                 threadKiller = nil
                 connectionStatus = "Disconnected"
                 UIApplication.shared.isIdleTimerDisabled = false
-                audioPlayer?.stop()
-                audioPlayer = nil
+                if backgroundService.isRunning { backgroundService.stop() }
             }
 
             if newValue {
-                audioPlayer = enableBackgroundAudioTrick()
-                let cAddress = strdup(targetIP)
-                let success = start_simple_udp_proxy(cAddress, 51820, &threadKiller)
-                free(cAddress)
+                if backgroundService.start() {
+                    let cAddress = strdup(targetIP)
+                    let success = start_simple_udp_proxy(cAddress, UInt16(targetPort), &threadKiller)
+                    free(cAddress)
 
-                if success {
-                    connectionStatus = "Connected"
-                    UIApplication.shared.isIdleTimerDisabled = true
-                } else {
-                    connectionStatus = "Failed to connect"
-                    plsEnable = false
+                    if success {
+                        connectionStatus = "Connected"
+                        UIApplication.shared.isIdleTimerDisabled = true
+                    } else {
+                        connectionStatus = "Error: Failed to connect"
+                        plsEnable = false
+                    }
                 }
             }
         }
-    }
-}
-
-
-@discardableResult
-func enableBackgroundAudioTrick() -> AVAudioPlayer? {
-    let session = AVAudioSession.sharedInstance()
-    do {
-        try session.setCategory(.playback, mode: .default)
-        try session.setActive(true)
-
-        let silent = Bundle.main.url(forResource: "silence", withExtension: "mp3")!
-        let player = try AVAudioPlayer(contentsOf: silent)
-        player.numberOfLoops = -1
-        player.volume = 0
-        player.play()
-        return player
-    } catch {
-        print("Failed to enable background audio: \(error)")
-        return nil
     }
 }
 
