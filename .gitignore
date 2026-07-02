@@ -2,6 +2,7 @@
 /build
 /relay/target
 
+Signing.xcconfig
 *.xcframework
 lightning_router_rs.h
 bundle.zip

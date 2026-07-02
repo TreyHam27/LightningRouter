@@ -5,6 +5,12 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>location</string>
+		<string>processing</string>
 	</array>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Allows for longer background execution time.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Required to allow you to set this to always.</string>
 </dict>
 </plist>
