@@ -18,11 +18,18 @@ pub async fn main() {
         .await
         .expect("Failed to connect to usbmuxd");
     let devices = conn.get_devices().await.expect("Failed to get devices");
-    let devices: Vec<UsbmuxdDevice> = devices
-        .into_iter()
+    let usb_devices: Vec<&UsbmuxdDevice> = devices
+        .iter()
         .filter(|x| x.connection_type == Connection::Usb)
         .collect();
-    let dev = devices.first().expect("No devices connected via USB");
+    let dev = match usb_devices.first() {
+        Some(d) => d,
+        None => {
+            let d = devices.first().expect("No device connected!");
+            println!("WARNING: using a network device, performance may be degraded");
+            d
+        }
+    };
     println!("Using {} to connect to", dev.udid);
     let conn = conn
         .connect_to_device(dev.device_id, 51820, "lightning-router")
