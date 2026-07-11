@@ -31,6 +31,20 @@ pub async fn main() {
         }
     };
     println!("Using {} to connect to", dev.udid);
+
+    loop {
+        run_proxy(&addr, dev).await;
+
+        println!("Disconnected from app, reconnecting");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn run_proxy(addr: &UsbmuxdAddr, dev: &UsbmuxdDevice) {
+    let conn = addr
+        .connect(69)
+        .await
+        .expect("Failed to connect to usbmuxd");
     let conn = conn
         .connect_to_device(dev.device_id, 51820, "lightning-router")
         .await
