@@ -4,6 +4,8 @@
 //! little-endian length followed by that many bytes. A zero-length frame, or
 //! the stream ending on a frame boundary, means the peer is done.
 
+pub mod flow;
+
 use std::io;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -12,6 +14,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 pub const DEVICE_PORT: u16 = 51820;
 /// UDP port the relay listens on, on the Mac.
 pub const RELAY_PORT: u16 = 3400;
+/// TCP port the app's flow server listens on, on the device (serverless mode).
+pub const FLOW_PORT: u16 = 51821;
 /// Largest datagram a frame can carry.
 pub const MAX_DATAGRAM: usize = u16::MAX as usize;
 

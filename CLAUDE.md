@@ -25,7 +25,7 @@ WireGuard client ──UDP──> relay (Mac, 0.0.0.0:3400)
                           WireGuard endpoint (host/port typed into the app)
 ```
 
-UDP datagrams ride the usbmuxd TCP stream as **frames**: a `u16` little-endian length, then the datagram. A zero-length frame, or the stream ending on a frame boundary, means the peer is done. `frame/src/lib.rs` is the single source of truth for the frame and for both port numbers.
+UDP datagrams ride the usbmuxd TCP stream as **frames**: a `u16` little-endian length, then the datagram. A zero-length frame, or the stream ending on a frame boundary, means the peer is done. `frame/src/lib.rs` is the single source of truth for the frame and for the port numbers (`DEVICE_PORT`, `RELAY_PORT`, `FLOW_PORT`). `frame/src/flow.rs` is the serverless-mode flow-port codec (`Request`, `Status`; spec in `docs/specs/serverless-spec.md`), not yet used by either end.
 
 Both ends run the same shape: split the stream, then run one loop per direction under a `select!` (`session` in `src/lib.rs`, `bridge` in `relay/src/main.rs`). `FrameReader::next` and `FrameWriter::send` are not cancel-safe, so keep each inside its own loop; a `select!` branch that reads or writes a frame directly would desynchronise the stream when the other branch wins.
 

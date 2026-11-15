@@ -12,7 +12,7 @@ Read `CLAUDE.md` first for the current architecture and commands.
 - Step 1 (spec) done: `docs/specs/serverless-spec.md` holds the design
   (D1 to D12), the flow-port wire protocol, every test case by name, and
   the build steps 2 to 13 with their models. Read it before any build step.
-- No serverless code exists yet.
+- Only the frame-crate flow codec exists (step 2).
 - Branch `feat/serverless`, based on local `improve/proxy-core` (commit
   `634cf9e`), which is unpublished. `origin` is the upstream author's repo,
   not a fork the user owns: push nothing and open no PR without asking.
@@ -48,15 +48,14 @@ loopback only (D9).
 
 ## Next step
 
-**Step 2: shared flow codec. Model: Sonnet medium. About 40 tool calls.**
+**Step 3: phone flow server. Model: Sonnet medium. About 40 tool calls.**
 
-Add `FLOW_PORT = 51821` to `frame/src/lib.rs` and a `frame/src/flow.rs`
-module that encodes and decodes the request and the status byte exactly as
-the spec's "Wire protocol" section says. Write the eight tests listed under
-"Shared codec". Done when `cd frame && cargo test && cargo clippy
---all-targets` are clean and `make test` passes. Then update `CLAUDE.md`
-(the frame crate's role), shrink this step to one line, set "Next step" to
-step 3 from the spec's table, commit, and hand off.
+`src/flow.rs`, `Service` generalisation, `flow_start` FFI, fd limit,
+loopback bind, `rlib`, with its tests from the spec's "Phone flow server"
+section; run `make`. Use `lightning_router_frame::flow` (`Request`,
+`read_request`, `ReadError`, `Status`, `write_status`). Done when `make test`,
+clippy and `make` pass. Then update `CLAUDE.md`, shrink this step to one
+line, set "Next step" to step 4, commit, and hand off.
 
 ## Commands
 
@@ -68,4 +67,5 @@ cd relay && cargo run --release
 
 ## Finished steps
 
+- Step 2: shared flow codec (`frame/src/flow.rs`, `FLOW_PORT`), 8 tests.
 - Step 1: spec written (`serverless-spec.md`). Details in `serverless-log.md`.
