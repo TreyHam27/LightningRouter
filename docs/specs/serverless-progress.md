@@ -9,7 +9,10 @@ Read `CLAUDE.md` first for the current architecture and commands.
 
 ## Current state
 
-- Step 1 (spec) not started. No serverless code exists.
+- Step 1 (spec) done: `docs/specs/serverless-spec.md` holds the design
+  (D1 to D12), the flow-port wire protocol, every test case by name, and
+  the build steps 2 to 13 with their models. Read it before any build step.
+- No serverless code exists yet.
 - Branch `feat/serverless`, based on local `improve/proxy-core` (commit
   `634cf9e`), which is unpublished. `origin` is the upstream author's repo,
   not a fork the user owns: push nothing and open no PR without asking.
@@ -35,41 +38,25 @@ Read `CLAUDE.md` first for the current architecture and commands.
    routes, DNS or interfaces is restored on exit, including on Ctrl-C and
    on a crash where that is achievable. This is the risky core: Opus owns it.
 
-## Proposed staging (step 1 confirms or changes it)
-
-- **Stage A, no root:** the phone exposes a per-flow proxy (SOCKS5 is the
-  obvious candidate) over usbmuxd; the relay publishes it on a localhost
-  port. Usable at once from a browser or the macOS SOCKS setting, and it is
-  the phone-side foundation for stage B.
-- **Stage B, whole system:** the relay creates a `utun` interface (needs
-  root), runs a userspace stack, and turns captured TCP and UDP flows into
-  stage A requests. Adds route and DNS setup and teardown.
-- **Stage C, app:** mode picker and status in the SwiftUI app.
-
-Open questions for the spec: one usbmuxd connection per flow versus one
-multiplexed stream; how UDP flows (DNS, QUIC) are carried and timed out;
-which stack crate; how root is obtained and scoped; what happens to
-IPv6 and to ICMP; how each stage is tested without a device (the iOS
-simulator shares the Mac's network stack, so the app's listener is
-reachable on loopback there).
+Decisions 6 onwards are D1 to D12 in the spec. The ones most easily
+missed: one usbmuxd connection per flow (D1, gated by a measurement in
+step 6); fake-IP DNS on the Mac, names resolved on the phone at connect
+(D4); no tun2proxy or socks5-impl because of GPL (D5); root work happens
+before the runtime starts, then privileges drop, and teardown is the utun
+fd plus the SCDynamicStore session closing (D8); the flow server binds
+loopback only (D9).
 
 ## Next step
 
-**Step 1: write the spec. Model: Opus. No product code.**
+**Step 2: shared flow codec. Model: Sonnet medium. About 40 tool calls.**
 
-Produce `docs/specs/serverless-spec.md`:
-
-- the design for each stage, answering the open questions above, with the
-  reason for each choice;
-- the wire protocol between relay and phone, exact enough to implement;
-- the test cases for each stage, written out by name and intent;
-- a step list for the build, each step one area, about 40 tool calls, with
-  its model per the user's table (risky core: Opus; wiring, tests from
-  listed cases, UI that copies the existing pattern: Sonnet).
-
-Done when: every open question has a decision, every stage has named test
-cases, and this file's "Next step" names build step 2. Then commit and hand
-off as the user's global instructions describe.
+Add `FLOW_PORT = 51821` to `frame/src/lib.rs` and a `frame/src/flow.rs`
+module that encodes and decodes the request and the status byte exactly as
+the spec's "Wire protocol" section says. Write the eight tests listed under
+"Shared codec". Done when `cd frame && cargo test && cargo clippy
+--all-targets` are clean and `make test` passes. Then update `CLAUDE.md`
+(the frame crate's role), shrink this step to one line, set "Next step" to
+step 3 from the spec's table, commit, and hand off.
 
 ## Commands
 
@@ -81,4 +68,4 @@ cd relay && cargo run --release
 
 ## Finished steps
 
-(none yet; details move to `serverless-log.md`)
+- Step 1: spec written (`serverless-spec.md`). Details in `serverless-log.md`.
