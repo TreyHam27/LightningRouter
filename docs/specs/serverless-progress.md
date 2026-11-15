@@ -46,20 +46,44 @@ before the runtime starts, then privileges drop, and teardown is the utun
 fd plus the SCDynamicStore session closing (D8); the flow server binds
 loopback only (D9).
 
+## Parallel tracks
+
+Steps that do not depend on each other run in parallel, each on its own
+branch and worktree, branched from `feat/serverless` at `9657647`. A track
+touches only its own files and leaves this file and `CLAUDE.md` alone; its
+status file lives on its own branch and says when the track is done.
+
+| Track | Branch | Steps | Status file |
+|---|---|---|---|
+| net | `feat/serverless-net` | 8 (fakedns, Sonnet), then 9 (stack, Opus medium) | `docs/specs/serverless-track-net.md` |
+| core | `feat/serverless-core` | 7a: `system/setup.rs`, its unit tests, the DNS-only stub stack; no privileged runs (Opus high) | `docs/specs/serverless-track-core.md` |
+| app | `feat/serverless-app` | 11 except C2 (Sonnet) | `docs/specs/serverless-track-app.md` |
+
+Steps 7a, 8, 9 and 11 are never handed off from the main line.
+
 ## Next step
 
-**Step 6: stage A on a device (spec "Stage A, on a device"). Needs the user.**
+The main line (this worktree) is idle until tracks finish. In order:
 
-Gap: `Tunnel.swift` never calls `flow_start` (grep finds nothing), and step 11
-is the Tunnel mode picker. Before the device run, a Sonnet thread must add a
-minimal way to start flow mode in the app (spec step 11 / Stage C), or the
-user tests with a temporary build. Check the spec's D-A1 setup text first.
-
-The user must: run `make`, build and install the app from Xcode, start it with
-the flow server, turn Wi-Fi off on the Mac, run
-`cd relay && cargo run --release -- --socks`, then do D-A1 to D-A4 from the
-spec and report results. After that a Sonnet thread can finish the
-`examples/flood.rs`, the D1 gate decision and the README section.
+1. **Step 9m: merge finished tracks into `feat/serverless`. Model: Sonnet
+   medium.** Merge a track once its status file says it is done; the app
+   track can be merged alone, ahead of the others, to unblock step 6.
+   Expect small conflicts in `relay/Cargo.toml`, `relay/Cargo.lock`
+   (regenerate it), `relay/src/main.rs` and `relay/src/system/mod.rs`. Fold
+   each merged status file into this file and `CLAUDE.md`, delete it, then
+   run `make test` and clippy in each crate.
+2. **Step 6: stage A on a device. Needs the user.** Needs the app track
+   merged first, because the app cannot start flow mode until step 11 is
+   in. The user must: run `make`, build and install the app from Xcode,
+   start it in Serverless mode, turn Wi-Fi off on the Mac, run
+   `cd relay && cargo run --release -- --socks`, then do D-A1 to D-A4 from
+   the spec and report results. After that a Sonnet thread finishes
+   `examples/flood.rs`, the D1 gate decision and the README section.
+3. **Step 7b: the privileged runs M1, M2, M3, M7 and M8, from the core
+   track's runbook. Model: Opus high. Needs the user** for sudo, and needs
+   every other thread on this Mac idle, because the runs change its routes
+   and DNS.
+4. Step 10, then C2 on a device, then steps 12 and 13, as in the spec.
 
 ## Commands
 
