@@ -7,7 +7,7 @@
 
 import Foundation
 
-protocol BackgroundServiceProtocol {
+protocol BackgroundServiceProtocol: Sendable {
     var isRunning: Bool { get }
     func start() -> Bool
     func stop()
@@ -23,40 +23,46 @@ extension BackgroundService {
     }
 }
 
-final class BackgroundService: BackgroundServiceProtocol, @unchecked Sendable {
-    @Published var isRunningPublisher: Bool = false
+/// Keeps the app alive in the background, by whichever `Mode` is selected.
+///
+/// Main-actor bound so the strategies are created on the main thread:
+/// `CLLocationManager` delivers its delegate callbacks on the run loop of the
+/// thread that created it.
+@MainActor
+final class BackgroundService {
+    private(set) var mode: Mode = .audio
+    private(set) var isRunning = false
 
-    public static let shared = BackgroundService()
-
-    var isRunning: Bool { impl.isRunning }
+    private var impl: BackgroundServiceProtocol = AudioBackgroundService()
 
     @discardableResult
     func start() -> Bool {
-        let res = impl.start()
-        isRunningPublisher = res
-        return res
+        isRunning = impl.start()
+        return isRunning
     }
 
     func stop() {
-        guard isRunning else { return }
-        isRunningPublisher = false
+        isRunning = false
         impl.stop()
     }
 
-    func prepare() async -> Bool {
-        await impl.prepare()
-    }
-
+    /// Switches to `mode`, carrying a running service over to it.
+    ///
+    /// False if the mode is unavailable, which leaves the current mode in
+    /// place, or if the service was running and the new mode failed to start.
     func applyMode(_ mode: Mode) async -> Bool {
-        print(mode)
-        switch mode {
-        case .audio:
-            impl = AudioBackgroundService()
-        case .location:
-            impl = LocationBackgroundService()
-        }
-        return await impl.prepare()
-    }
+        guard mode != self.mode else { return await impl.prepare() }
 
-    private var impl: BackgroundServiceProtocol = AudioBackgroundService()
+        let next: BackgroundServiceProtocol = switch mode {
+        case .audio: AudioBackgroundService()
+        case .location: LocationBackgroundService()
+        }
+        guard await next.prepare() else { return false }
+
+        let wasRunning = isRunning
+        if wasRunning { stop() }
+        impl = next
+        self.mode = mode
+        return wasRunning ? start() : true
+    }
 }

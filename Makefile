@@ -1,41 +1,47 @@
-# intended to be run by Xcode during build
+# Builds LightningRouterRS.xcframework, the Rust half of the app. Xcode links
+# whatever copy is on disk, so run this from the repo root after changing
+# src/ or frame/, then build the app in Xcode.
+#
+#   make targets   install the Rust targets (once)
+#   make           build the xcframework and bundle.zip
+#   make test      run every crate's tests on this Mac
 
-CARGO := $(HOME)/.cargo/bin/cargo
+CARGO ?= cargo
 
-.PHONY: all debug clean build
+LIB := liblightning_router.a
+SIM_TARGETS := aarch64-apple-ios-sim x86_64-apple-ios
+MAC_TARGETS := aarch64-apple-darwin x86_64-apple-darwin
+TARGETS := aarch64-apple-ios $(SIM_TARGETS) $(MAC_TARGETS)
+
+.PHONY: all build targets test clean
 
 all: build
 
+targets:
+	rustup target add $(TARGETS)
+
 build:
-	# iOS device build
-	BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(xcrun --sdk iphoneos --show-sdk-path)" \
-	$(CARGO) build --lib --release --target aarch64-apple-ios
-
-	# iOS Simulator (arm64)
-	BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(xcrun --sdk iphonesimulator --show-sdk-path)" \
-	$(CARGO) build --lib --release --target aarch64-apple-ios-sim
-
-	# iOS Simulator (x86_64)
-	BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(xcrun --sdk iphonesimulator --show-sdk-path)" \
-	$(CARGO) build --lib --release --target x86_64-apple-ios
-	cargo build --lib --release --target aarch64-apple-darwin
-	cargo build --lib --release --target x86_64-apple-darwin
-	rm -rf LightningRouterRS.xcframework
+	$(CARGO) build --lib --release $(addprefix --target ,$(TARGETS))
+	rm -rf build LightningRouterRS.xcframework bundle.zip
 	mkdir -p build/include
-	cp lightning_router_rs.h build/include
-	cp module.modulemap build/include
+	cp lightning_router_rs.h module.modulemap build/include
 	lipo -create -output build/liblightning_router-ios-sim.a \
-  	target/aarch64-apple-ios-sim/release/liblightning_router.a \
-  	target/x86_64-apple-ios/release/liblightning_router.a
+		$(foreach target,$(SIM_TARGETS),target/$(target)/release/$(LIB))
 	lipo -create -output build/liblightning_router-macos.a \
-  	target/aarch64-apple-darwin/release/liblightning_router.a \
-  	target/x86_64-apple-darwin/release/liblightning_router.a
-
+		$(foreach target,$(MAC_TARGETS),target/$(target)/release/$(LIB))
 	xcodebuild -create-xcframework \
-  	-library target/aarch64-apple-ios/release/liblightning_router.a -headers build/include \
-  	-library build/liblightning_router-ios-sim.a -headers build/include \
-  	-library build/liblightning_router-macos.a -headers build/include \
-  	-output LightningRouterRS.xcframework
-  
-	zip -r bundle.zip LightningRouterRS.xcframework
+		-library target/aarch64-apple-ios/release/$(LIB) -headers build/include \
+		-library build/liblightning_router-ios-sim.a -headers build/include \
+		-library build/liblightning_router-macos.a -headers build/include \
+		-output LightningRouterRS.xcframework
+	zip -qr bundle.zip LightningRouterRS.xcframework
 	openssl dgst -sha256 bundle.zip
+
+test:
+	$(CARGO) test
+	cd frame && $(CARGO) test
+	cd relay && $(CARGO) test
+
+clean:
+	$(CARGO) clean
+	rm -rf build LightningRouterRS.xcframework bundle.zip lightning_router_rs.h

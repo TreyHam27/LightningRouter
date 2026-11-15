@@ -6,17 +6,13 @@
 //
 
 import SwiftUI
-import LightningRouterRS
 
 struct ContentView: View {
-    @State private var plsEnable = false
     @AppStorage("lastTargetIP") private var targetIP: String = "1.1.1.1"
     @AppStorage("lastTargetPort") private var targetPort: Int = 51820
-    @AppStorage("backgroundMode") var backgroundMode: BackgroundService.Mode = .audio
-    @AppStorage("showLocationIndicator") var showIndicator: Bool = true
-    @State var backgroundService: BackgroundService = BackgroundService()
-    @State private var threadKiller: OpaquePointer? = nil
-    @State private var connectionStatus: String = "Disconnected"
+    @AppStorage("backgroundMode") private var backgroundMode: BackgroundService.Mode = .audio
+    @AppStorage("showLocationIndicator") private var showIndicator: Bool = true
+    @State private var tunnel = Tunnel()
 
     var body: some View {
         VStack(spacing: 20) {
@@ -30,8 +26,9 @@ struct ContentView: View {
                 .font(.title2)
                 .bold()
 
+            // The target is fixed for the life of a tunnel.
             HStack {
-                TextField("IP address", text: $targetIP)
+                TextField("IP address or hostname", text: $targetIP)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .padding(.horizontal)
                     .disableAutocorrection(true)
@@ -49,11 +46,10 @@ struct ContentView: View {
                         }
                     }
             }
+            .disabled(tunnel.isOn)
 
-            Toggle(isOn: $plsEnable) {
-                Text("Enable Tunnel")
-            }
-            .padding(.horizontal)
+            Toggle("Enable Tunnel", isOn: tunnelIsOn)
+                .padding(.horizontal)
 
             if backgroundMode == .location {
                 Toggle(isOn: $showIndicator) {
@@ -71,52 +67,63 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .onChange(of: backgroundMode) { oldMode, newMode in
                 Task {
-                    if !(await backgroundService.applyMode(newMode)) {
-                        connectionStatus = "Error: Failed to set background mode"
+                    if !(await tunnel.setBackgroundMode(newMode)) {
+                        backgroundMode = oldMode
                     }
                 }
             }
 
-            Text("Status: \(connectionStatus)")
-                .foregroundColor(plsEnable ? .green : .secondary)
-                .font(.footnote)
-                .padding(.top, 10)
+            VStack(spacing: 6) {
+                Text("Status: \(statusText)")
+                    .foregroundColor(isRelaying ? .green : .secondary)
+                if let problem = tunnel.problem {
+                    Text(problem)
+                        .foregroundColor(.red)
+                }
+            }
+            .font(.footnote)
+            .multilineTextAlignment(.center)
+            .padding(.top, 10)
 
             Spacer()
         }
-        .onAppear {
-            Task {
-                await backgroundService.applyMode(backgroundMode)
-            }
-        }
         .padding()
-        .onChange(of: plsEnable) { oldValue, newValue in
-            print("Tunnel changed: \(newValue), IP: \(targetIP)")
-
-            if threadKiller != nil {
-                thread_killer_kill(threadKiller)
-                threadKiller = nil
-                connectionStatus = "Disconnected"
-                UIApplication.shared.isIdleTimerDisabled = false
-                if backgroundService.isRunning { backgroundService.stop() }
-            }
-
-            if newValue {
-                if backgroundService.start() {
-                    let cAddress = strdup(targetIP)
-                    let success = start_simple_udp_proxy(cAddress, UInt16(targetPort), &threadKiller)
-                    free(cAddress)
-
-                    if success {
-                        connectionStatus = "Connected"
-                        UIApplication.shared.isIdleTimerDisabled = true
-                    } else {
-                        connectionStatus = "Error: Failed to connect"
-                        plsEnable = false
-                    }
-                }
+        .task {
+            if !(await tunnel.setBackgroundMode(backgroundMode)) {
+                backgroundMode = .audio
             }
         }
+    }
+
+    private var tunnelIsOn: Binding<Bool> {
+        Binding {
+            tunnel.isOn
+        } set: { enable in
+            if enable {
+                tunnel.start(host: targetIP.trimmingCharacters(in: .whitespaces), port: targetPort)
+            } else {
+                tunnel.stop()
+            }
+        }
+    }
+
+    private var isRelaying: Bool {
+        if case .relaying = tunnel.status { true } else { false }
+    }
+
+    private var statusText: String {
+        switch tunnel.status {
+        case .off:
+            "Off"
+        case .waitingForRelay:
+            "Waiting for the relay on your Mac"
+        case .relaying(let up, let down):
+            "Relaying · ↓ \(byteCount(down)) ↑ \(byteCount(up))"
+        }
+    }
+
+    private func byteCount(_ bytes: UInt64) -> String {
+        Int64(clamping: bytes).formatted(.byteCount(style: .binary))
     }
 }
 

@@ -15,16 +15,18 @@ to proxy connections as a NAT.
 
 ## Building/Running
 
-Build the dependencies
+Build the Rust half of the app from the repo root
+(`make targets` installs the Rust targets it needs, once)
 
 ```sh
-cd LightningRouter
+make targets
 make
 ```
 
-Build the app with Xcode and install on your device
+Build the app with Xcode and install on your device.
+Run `make` again whenever the Rust code changes.
 
-Build the Mac relay
+Run the Mac relay
 
 ```sh
 cd relay
@@ -34,9 +36,20 @@ cargo run --release
 In Wireguard, set the target address to ``127.0.0.1:3400``
 (or the IP of your Mac from another device).
 
-In the iOS app, set the target IP to your Wireguard endpoint, and enable.
+In the iOS app, set the target to your Wireguard endpoint
+(an IP address or a hostname), and enable.
+
+The relay and the app can be started in either order. The relay waits
+for the device and the app, and reconnects if either goes away. The app
+shows whether the relay is connected and how much it has carried.
 
 Profit.
+
+## Tests
+
+```sh
+make test
+```
 
 ## Speed
 

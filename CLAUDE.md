@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-LightningRouter tethers a Mac to an iPhone's mobile data over USB by relaying a WireGuard (UDP) connection through the phone. Three pieces, in two independent Cargo crates (no workspace) plus an Xcode project:
+LightningRouter tethers a Mac to an iPhone's mobile data over USB by relaying a WireGuard (UDP) connection through the phone. Three independent Cargo crates (no workspace, separate lockfiles) plus an Xcode project:
 
 | Piece | Path | Runs on |
 |---|---|---|
+| Frame codec and port constants, shared by both ends | `frame/` (crate `lightning-router-frame`) | both |
 | Rust static library, exposed to Swift over a C FFI | `src/` (root crate `lightning-router`) | iPhone, inside the app |
 | SwiftUI app | `LightningRouter/`, `LightningRouter.xcodeproj` | iPhone |
 | Relay binary | `relay/` (crate `lightning-router-relay`) | Mac |
@@ -18,67 +19,66 @@ LightningRouter tethers a Mac to an iPhone's mobile data over USB by relaying a 
 WireGuard client ──UDP──> relay (Mac, 0.0.0.0:3400)
                               │  TCP via usbmuxd to device port 51820
                               ▼
-                          app's Rust lib (TCP listener 0.0.0.0:51820)
+                          app's Rust lib (TCP listener, all interfaces, port 51820)
                               │  UDP
                               ▼
-                          WireGuard endpoint (IP/port typed into the app)
+                          WireGuard endpoint (host/port typed into the app)
 ```
 
-UDP datagrams ride the usbmuxd TCP stream with a **frame**: a `u16` little-endian length, then the datagram. Both directions use the same frame, and a zero-length frame means "connection closed". The frame is implemented twice, in `src/lib.rs` and `relay/src/main.rs`; change both together.
+UDP datagrams ride the usbmuxd TCP stream as **frames**: a `u16` little-endian length, then the datagram. A zero-length frame, or the stream ending on a frame boundary, means the peer is done. `frame/src/lib.rs` is the single source of truth for the frame and for both port numbers.
 
-The ports (3400 on the Mac, 51820 on the device) are hardcoded in those same two files.
+Both ends run the same shape: split the stream, then run one loop per direction under a `select!` (`session` in `src/lib.rs`, `bridge` in `relay/src/main.rs`). `FrameReader::next` and `FrameWriter::send` are not cancel-safe, so keep each inside its own loop; a `select!` branch that reads or writes a frame directly would desynchronise the stream when the other branch wins.
 
 ## Commands
 
 ```sh
-# Compile-check on the host (fast; no iOS toolchain needed)
-cargo check                      # root crate
-cd relay && cargo check          # relay
+make test                          # every crate's tests, on the host
+cargo test relays_datagrams        # one test by name (run in the crate's directory)
+cargo clippy --all-targets         # per crate; all three are warning-free
 
-# Build the xcframework the app links against (run from the repo root)
-make CARGO="$(which cargo)"
+make targets                       # once: rustup target add for the five targets
+make                               # build LightningRouterRS.xcframework + bundle.zip
 
-# Run the Mac relay (needs the app running with the tunnel enabled)
-cd relay && cargo run --release
+cd relay && cargo run --release    # run the Mac relay
 ```
 
-There are no tests and no lint configuration.
+Tests use real loopback sockets and need no device. The root crate is a `staticlib`, so its tests are unit tests inside `src/lib.rs`; a `tests/` directory could not link against it.
 
 ### Building the app
 
-1. `make` builds the root crate for five targets and packages `LightningRouterRS.xcframework` at the repo root. Install them first: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin`.
+1. `make` (from the repo root) builds the root crate for five targets and packages `LightningRouterRS.xcframework` at the repo root.
 2. Build and install the app from Xcode.
 
 Things the build files do not say plainly:
 
-- The Makefile hardcodes `CARGO := $(HOME)/.cargo/bin/cargo` for the iOS targets. Pass `CARGO=` when cargo lives elsewhere (e.g. a Homebrew rustup).
-- The Makefile header says Xcode runs it, but the Xcode project has no script build phase. Run `make` by hand after every change to `src/`; Xcode links whatever xcframework is already on disk.
+- The Xcode project has no script build phase. Run `make` by hand after every change to `src/` or `frame/`; Xcode links whatever xcframework is already on disk.
+- `make CARGO=/path/to/cargo` overrides the cargo binary.
 - `lightning_router_rs.h` is generated at the repo root by `build.rs` (cbindgen) on every cargo build of the root crate. The header, the xcframework and `bundle.zip` are gitignored build outputs.
-- The README's `cd LightningRouter && make` means the repo root, not the `LightningRouter/` app folder.
 - Signing: `LightningRouter/Build.xcconfig` holds the upstream team ID and bundle ID and optionally includes a gitignored `LightningRouter/Signing.xcconfig`. Put local `DEVELOPMENT_TEAM` / `PRODUCT_BUNDLE_IDENTIFIER` overrides there.
 - `LightningRouter/` is a file-system-synchronized group: a file added to that folder joins the target without a `project.pbxproj` edit.
+- To compile-check the Swift without signing or a device:
+  `xcodebuild -project LightningRouter.xcodeproj -target LightningRouter -sdk iphonesimulator SYMROOT=<tmp> OBJROOT=<tmp> CODE_SIGNING_ALLOWED=NO build`. Keep `SYMROOT`/`OBJROOT` outside the repo, because the default `build/` is the Makefile's staging directory.
 
 ## FFI surface (`src/lib.rs`)
 
-Swift imports the library as the module `LightningRouterRS` (`module.modulemap`). Two functions:
+Swift imports the library as the module `LightningRouterRS` (`module.modulemap`). Three functions around an opaque `ProxyHandle`:
 
-- `start_simple_udp_proxy(address, port, &threadKiller) -> bool` binds the TCP listener synchronously (returns `false` if the bind fails), then spawns the accept loop on a process-global Tokio runtime and hands back an opaque `ThreadKiller`.
-- `thread_killer_kill(killer)` signals the accept loop and frees the `ThreadKiller`; each pointer is killed once.
+- `proxy_start(address, port, &proxy) -> bool` binds the listener synchronously (false if the bind fails) and spawns the accept loop on a process-global Tokio runtime. `address` is an IP or a hostname, resolved again for each relay connection.
+- `proxy_stats(proxy) -> ProxyStats` reads atomics: relays connected now, bytes up, bytes down.
+- `proxy_stop(proxy)` signals the accept loop, blocks until it has exited, and frees the handle. The port is free when it returns, and dropping the loop's `JoinSet` aborts every session. It blocks on the runtime, so call it from outside the runtime (tests are plain `#[test]`, not `#[tokio::test]`, for this reason).
 
-Shutdown is polled, not immediate: the accept loop checks the kill signal between `select!` wake-ups, at most 5 s apart, and holds port 51820 until it exits. Per-connection relay tasks are spawned separately and end on their own socket errors, not on the kill signal.
-
-Any signature change here needs a `make` rebuild so the regenerated header reaches the xcframework, plus the matching call-site change in `LightningRouter/ContentView.swift`.
+A signature change here needs a `make` rebuild so the regenerated header reaches the xcframework, plus the matching call site in `LightningRouter/Tunnel.swift`.
 
 ## App (`LightningRouter/`)
 
-`ContentView.swift` is the whole UI: the "Enable Tunnel" toggle calls the two FFI functions and holds the `ThreadKiller` pointer in view state.
+`Tunnel.swift` is the only caller of the FFI: a main-actor `@Observable` model that owns the `ProxyHandle`, polls `proxy_stats` once a second for the status line, and starts and stops the background service with the proxy. `ContentView.swift` is the view over it.
 
-iOS suspends a backgrounded app, which would stall the tunnel, so `BackgroundHelper/` (adapted from iTorrent) keeps the app alive. `BackgroundService` is a facade over two strategies chosen in the UI: `AudioBackgroundService` loops the bundled `silence.mp3`, and `LocationBackgroundService` runs background location updates. The matching `UIBackgroundModes` and location usage strings live in `LightningRouter/Info.plist`.
+iOS suspends a backgrounded app, which would stall the tunnel, so `BackgroundHelper/` (adapted from iTorrent) keeps the app alive. `BackgroundService` is a main-actor facade over two strategies chosen in the UI: `AudioBackgroundService` loops the bundled `silence.mp3`, and `LocationBackgroundService` runs background location updates. The facade tracks `isRunning` itself, because the audio strategy's own `isRunning` is false for a moment after `start()`. The matching `UIBackgroundModes` and location usage strings live in `LightningRouter/Info.plist`.
 
 ## Relay (`relay/src/main.rs`)
 
-Picks the first USB device from usbmuxd, falling back to a network device with a warning. It reconnects in a loop after the app drops the connection, but it panics if the app is not listening when it tries to connect, so start the tunnel in the app first.
+Binds UDP 3400 once, then loops: list usbmuxd devices (USB preferred, network as fallback), connect to the app, bridge until the link drops, retry. Devices are listed on every attempt because usbmuxd gives a replugged device a new ID. Replies from the app go to whichever address last sent a datagram.
 
-## Planned work
+## Not yet built
 
-`src/tcp/packets.rs` is entirely commented out: an IP/TCP packet parser copied from the `idevice` crate, kept as the starting point for the userspace TCP stack / NAT the README describes. The crate compiles as if the `tcp` module were empty.
+The README's long-term vision is a userspace TCP stack on the device acting as a NAT, replacing the WireGuard dependency. Nothing in the tree implements it; the commented-out packet parser that used to sit in `src/tcp/` was removed and is in git history (last present in commit `2784618`).

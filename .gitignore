@@ -1,6 +1,8 @@
 /target
 /build
 /relay/target
+/frame/target
+/frame/Cargo.lock
 
 Signing.xcconfig
 *.xcframework

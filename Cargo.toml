@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1.47", features = ["full"] }
-once_cell = "1.21"
+lightning-router-frame = { path = "frame" }
+tokio = { version = "1.47", features = ["rt-multi-thread", "net", "sync", "macros", "time"] }
 
 [build-dependencies]
 cbindgen = "0.29"

@@ -1,104 +1,199 @@
 // Jackson Coxson
 
-use std::{net::SocketAddr, str::FromStr};
+//! The Mac end of the link: takes WireGuard's UDP datagrams and exchanges
+//! them, framed, with the LightningRouter app over usbmuxd.
 
-use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdDevice};
+use std::{
+    cell::Cell,
+    io,
+    net::{Ipv4Addr, SocketAddr},
+    time::Duration,
+};
+
+use idevice::{
+    ReadWrite,
+    usbmuxd::{Connection, UsbmuxdAddr},
+};
+use lightning_router_frame::{DEVICE_PORT, FrameReader, FrameWriter, MAX_DATAGRAM, RELAY_PORT};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncWrite},
     net::UdpSocket,
 };
 
-#[tokio::main]
-pub async fn main() {
+const USBMUXD_TAG: u32 = 69;
+/// How long to wait before looking for the device or the app again.
+const RETRY: Duration = Duration::from_secs(1);
+/// How long to wait before reconnecting to an app that was just connected.
+const RECONNECT: Duration = Duration::from_millis(100);
+
+/// The WireGuard client replies go to: whoever sent the last datagram.
+type Client = Cell<Option<SocketAddr>>;
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     env_logger::init();
 
-    let addr = UsbmuxdAddr::default();
-    let mut conn = addr
-        .connect(69)
-        .await
-        .expect("Failed to connect to usbmuxd");
-    let devices = conn.get_devices().await.expect("Failed to get devices");
-    let usb_devices: Vec<&UsbmuxdDevice> = devices
-        .iter()
-        .filter(|x| x.connection_type == Connection::Usb)
-        .collect();
-    let dev = match usb_devices.first() {
-        Some(d) => d,
-        None => {
-            let d = devices.first().expect("No device connected!");
-            println!("WARNING: using a network device, performance may be degraded");
-            d
+    // Bound once and kept across reconnects, so WireGuard keeps talking to
+    // the same socket while the app comes and goes.
+    let clients = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, RELAY_PORT)).await {
+        Ok(clients) => clients,
+        Err(e) => {
+            eprintln!("Failed to bind UDP port {RELAY_PORT}: {e}");
+            std::process::exit(1);
         }
     };
-    println!("Using {} to connect to", dev.udid);
+    println!("Listening for WireGuard on UDP port {RELAY_PORT}");
 
+    let client = Client::default();
+    let mut waiting_for = None;
     loop {
-        run_proxy(&addr, dev).await;
-
-        println!("Disconnected from app, reconnecting");
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        match connect_to_app().await {
+            Ok(link) => {
+                waiting_for = None;
+                match bridge(link, &clients, &client).await {
+                    Ok(()) => println!("The app closed the connection, reconnecting"),
+                    Err(e) => println!("Lost the app ({e}), reconnecting"),
+                }
+                tokio::time::sleep(RECONNECT).await;
+            }
+            Err(reason) => {
+                // Said once per reason, not once per attempt.
+                if waiting_for.as_ref() != Some(&reason) {
+                    println!("Waiting: {reason}");
+                    waiting_for = Some(reason);
+                }
+                tokio::time::sleep(RETRY).await;
+            }
+        }
     }
 }
 
-async fn run_proxy(addr: &UsbmuxdAddr, dev: &UsbmuxdDevice) {
-    let conn = addr
-        .connect(69)
+/// Finds a device and connects to the app on it, preferring USB. Devices are
+/// listed afresh on every attempt because usbmuxd gives a replugged device a
+/// new ID. The error is the reason to show the user.
+async fn connect_to_app() -> Result<Box<dyn ReadWrite>, String> {
+    let usbmuxd = UsbmuxdAddr::default();
+    let devices = usbmuxd
+        .connect(USBMUXD_TAG)
         .await
-        .expect("Failed to connect to usbmuxd");
-    let conn = conn
-        .connect_to_device(dev.device_id, 51820, "lightning-router")
+        .map_err(|e| format!("usbmuxd is unreachable ({e})"))?
+        .get_devices()
         .await
-        .expect("Failed to connect to LightningRouter on device. Is the app running?");
-    println!("Connected!");
-    let mut conn = conn.get_socket().unwrap();
+        .map_err(|e| format!("usbmuxd did not list devices ({e})"))?;
+    let device = devices
+        .iter()
+        .find(|device| device.connection_type == Connection::Usb)
+        .or(devices.first())
+        .ok_or("no device is connected")?;
+    let udid = &device.udid;
 
-    let input_socket = UdpSocket::bind("0.0.0.0:3400")
+    let link = usbmuxd
+        .connect(USBMUXD_TAG)
         .await
-        .expect("Failed to bind to UDP port 3400");
+        .map_err(|e| format!("usbmuxd is unreachable ({e})"))?
+        .connect_to_device(device.device_id, DEVICE_PORT, "lightning-router")
+        .await
+        .map_err(|e| format!("enable the tunnel in the app on {udid} ({e})"))?
+        .get_socket()
+        .ok_or_else(|| format!("usbmuxd gave no connection to {udid}"))?;
 
-    let mut buf0 = [0u8; u16::MAX as usize];
-    let mut conn_buf = [0u8; 2];
-    let mut input_address = SocketAddr::from_str("127.0.0.1:1").unwrap();
+    if device.connection_type == Connection::Usb {
+        println!("Connected to the app on {udid}");
+    } else {
+        println!("Connected to the app on {udid} over the network; USB is faster");
+    }
+    Ok(link)
+}
+
+/// Relays between the WireGuard client and the app until the link fails or
+/// the app hangs up.
+async fn bridge(
+    link: impl AsyncRead + AsyncWrite,
+    clients: &UdpSocket,
+    client: &Client,
+) -> io::Result<()> {
+    let (frames_in, frames_out) = tokio::io::split(link);
+
+    // Each direction runs in its own loop, so neither waits on the other and
+    // neither is cancelled mid-frame while the link is healthy.
+    tokio::select! {
+        done = uplink(clients, client, FrameWriter::new(frames_out)) => done,
+        done = downlink(FrameReader::new(frames_in), clients, client) => done,
+    }
+}
+
+async fn uplink(
+    clients: &UdpSocket,
+    client: &Client,
+    mut frames: FrameWriter<impl AsyncWrite + Unpin>,
+) -> io::Result<()> {
+    let mut datagram = vec![0; MAX_DATAGRAM];
     loop {
-        tokio::select! {
-            res = input_socket.recv_from(&mut buf0) => {
-                match res {
-                    Ok((size, addr)) => {
-                        input_address = addr;
-                        let buf0 = &buf0[..size];
-                        let size = buf0.len() as u16;
-                        if let Err(e) = conn.write_all(&size.to_le_bytes()).await {
-                            eprintln!("Failed to send to device: {e:?}");
-                            return;
-                        }
-                        if let Err(e) = conn.write_all(buf0).await {
-                            eprintln!("Failed to send to device: {e:?}");
-                            return;
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("Failed to read from input socket: {e:?}");
-                        return;
-                    },
-                }
-            }
-            res = conn.read_exact(&mut conn_buf) => {
-                match res {
-                    Ok(_) => {
-                        let size = u16::from_le_bytes(conn_buf);
-                        let mut buf1 = vec![0u8; size as usize];
-                        conn.read_exact(&mut buf1).await.expect("Failed to read body");
-                        if let Err(e) = input_socket.send_to(&buf1, input_address).await {
-                            eprintln!("Failed to send to input socket: {e:?}");
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to read from device: {e:?}");
-                        return;
-                    }
-                }
-            }
+        let (len, from) = clients.recv_from(&mut datagram).await?;
+        client.set(Some(from));
+        frames.send(&datagram[..len]).await?;
+    }
+}
+
+async fn downlink(
+    mut frames: FrameReader<impl AsyncRead + Unpin>,
+    clients: &UdpSocket,
+    client: &Client,
+) -> io::Result<()> {
+    while let Some(datagram) = frames.next().await? {
+        // Until a client has spoken there is nobody to deliver to.
+        if let Some(client) = client.get() {
+            clients.send_to(datagram, client).await?;
         }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::{io::duplex, time::timeout};
+
+    const PATIENCE: Duration = Duration::from_secs(5);
+
+    async fn local_socket() -> UdpSocket {
+        UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn carries_datagrams_between_the_client_and_the_app() {
+        let clients = local_socket().await;
+        let relay = clients.local_addr().unwrap();
+        let client = Client::default();
+        let (link, app) = duplex(MAX_DATAGRAM);
+        let (app_in, app_out) = tokio::io::split(app);
+        let (mut app_in, mut app_out) = (FrameReader::new(app_in), FrameWriter::new(app_out));
+        let wireguard = local_socket().await;
+
+        let exchange = async {
+            wireguard.send_to(b"handshake", relay).await.unwrap();
+            assert_eq!(app_in.next().await.unwrap(), Some(&b"handshake"[..]));
+
+            app_out.send(b"response").await.unwrap();
+            let mut datagram = [0; 64];
+            let (len, from) = wireguard.recv_from(&mut datagram).await.unwrap();
+            assert_eq!((&datagram[..len], from), (&b"response"[..], relay));
+        };
+
+        tokio::select! {
+            ended = bridge(link, &clients, &client) => panic!("bridge ended early: {ended:?}"),
+            done = timeout(PATIENCE, exchange) => done.expect("exchange stalled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn drops_datagrams_nobody_is_waiting_for_and_ends_when_the_app_hangs_up() {
+        let clients = local_socket().await;
+        let (link, mut app) = duplex(64);
+        FrameWriter::new(&mut app).send(b"too early").await.unwrap();
+        drop(app);
+
+        let ended = timeout(PATIENCE, bridge(link, &clients, &Client::default())).await;
+        assert!(matches!(ended, Ok(Ok(()))), "got {ended:?}");
     }
 }
