@@ -11,10 +11,22 @@ import SwiftUI
 @MainActor
 @Observable
 final class Tunnel {
+    enum Mode: String, CaseIterable, Identifiable {
+        case wireGuard = "WireGuard relay"
+        case serverless = "Serverless"
+        var id: Self { self }
+    }
+
     enum Status: Equatable {
         case off
         case waitingForRelay
-        case relaying(up: UInt64, down: UInt64)
+        case relaying(connections: UInt64, up: UInt64, down: UInt64)
+    }
+
+    /// What to start. WireGuard carries its target; serverless has none.
+    enum Start {
+        case wireGuard(host: String, port: Int)
+        case serverless
     }
 
     private(set) var status: Status = .off
@@ -24,25 +36,38 @@ final class Tunnel {
     var isOn: Bool { proxy != nil }
 
     private var proxy: OpaquePointer?
+    private(set) var mode: Mode = .wireGuard
     private var statsPoll: Task<Void, Never>?
     private let background = BackgroundService()
 
-    func start(host: String, port: Int) {
+    func start(mode: Start) {
         guard proxy == nil else { return }
-        guard let port = UInt16(exactly: port), port > 0 else {
-            problem = "The port must be between 1 and 65535"
-            return
+        var target: (host: String, port: UInt16)?
+        if case .wireGuard(let host, let port) = mode {
+            guard let port = UInt16(exactly: port), port > 0 else {
+                problem = "The port must be between 1 and 65535"
+                return
+            }
+            target = (host, port)
         }
         guard background.start() else {
             problem = "Could not stay active in the background"
             return
         }
         var started: OpaquePointer?
-        guard proxy_start(host, port, &started) else {
+        let ok = if let target {
+            proxy_start(target.host, target.port, &started)
+        } else {
+            flow_start(&started)
+        }
+        guard ok else {
             background.stop()
-            problem = "Could not listen for the relay"
+            problem = target == nil
+                ? "Could not start the serverless flow server"
+                : "Could not listen for the relay"
             return
         }
+        self.mode = target == nil ? .serverless : .wireGuard
 
         proxy = started
         problem = nil
@@ -85,7 +110,7 @@ final class Tunnel {
         guard let proxy else { return }
         let stats = proxy_stats(proxy)
         status = stats.connections > 0
-            ? .relaying(up: stats.bytes_up, down: stats.bytes_down)
+            ? .relaying(connections: UInt64(stats.connections), up: stats.bytes_up, down: stats.bytes_down)
             : .waitingForRelay
     }
 }
