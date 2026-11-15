@@ -8,6 +8,16 @@ lightning-router-frame = { path = "../frame" }
 tokio = { version = "1.47", features = ["rt", "net", "io-util", "macros", "time", "sync"] }
 idevice = { version = "0.1.63", features = ["usbmuxd"] }
 env_logger = { version = "0.11" }
+tun-rs = { version = "2.8", features = ["async_tokio"] }
+system-configuration = "0.8"
+libc = "0.2"
+system-configuration-sys = "0.6"
+core-foundation = "0.10"
 
 [dev-dependencies]
 lightning-router = { path = ".." }
+
+# D8: a panic must end the process at once, so the kernel closes the utun
+# and configd drops the service, the same as on SIGKILL.
+[profile.release]
+panic = "abort"
