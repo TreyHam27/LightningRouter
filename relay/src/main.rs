@@ -5,6 +5,8 @@
 mod device;
 mod flow;
 mod socks;
+#[allow(dead_code)] // wired to --system in step 10
+mod system;
 mod wireguard;
 
 #[tokio::main(flavor = "current_thread")]
