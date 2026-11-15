@@ -5,10 +5,11 @@ edition = "2024"
 
 [dependencies]
 lightning-router-frame = { path = "frame" }
-tokio = { version = "1.47", features = ["rt-multi-thread", "net", "sync", "macros", "time"] }
+tokio = { version = "1.47", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-util"] }
+libc = "0.2"
 
 [build-dependencies]
 cbindgen = "0.29"
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "rlib"]

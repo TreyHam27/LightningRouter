@@ -25,7 +25,7 @@ WireGuard client ──UDP──> relay (Mac, 0.0.0.0:3400)
                           WireGuard endpoint (host/port typed into the app)
 ```
 
-UDP datagrams ride the usbmuxd TCP stream as **frames**: a `u16` little-endian length, then the datagram. A zero-length frame, or the stream ending on a frame boundary, means the peer is done. `frame/src/lib.rs` is the single source of truth for the frame and for the port numbers (`DEVICE_PORT`, `RELAY_PORT`, `FLOW_PORT`). `frame/src/flow.rs` is the serverless-mode flow-port codec (`Request`, `Status`; spec in `docs/specs/serverless-spec.md`), not yet used by either end.
+UDP datagrams ride the usbmuxd TCP stream as **frames**: a `u16` little-endian length, then the datagram. A zero-length frame, or the stream ending on a frame boundary, means the peer is done. `frame/src/lib.rs` is the single source of truth for the frame and for the port numbers (`DEVICE_PORT`, `RELAY_PORT`, `FLOW_PORT`). `frame/src/flow.rs` is the serverless-mode flow-port codec (`Request`, `Status`; spec in `docs/specs/serverless-spec.md`); the phone's flow server (`src/flow.rs`) uses it, the relay does not yet.
 
 Both ends run the same shape: split the stream, then run one loop per direction under a `select!` (`session` in `src/lib.rs`, `bridge` in `relay/src/main.rs`). `FrameReader::next` and `FrameWriter::send` are not cancel-safe, so keep each inside its own loop; a `select!` branch that reads or writes a frame directly would desynchronise the stream when the other branch wins.
 
@@ -61,9 +61,10 @@ Things the build files do not say plainly:
 
 ## FFI surface (`src/lib.rs`)
 
-Swift imports the library as the module `LightningRouterRS` (`module.modulemap`). Three functions around an opaque `ProxyHandle`:
+Swift imports the library as the module `LightningRouterRS` (`module.modulemap`). The root crate is `staticlib` + `rlib`, so the relay can dev-depend on it. Four functions around an opaque `ProxyHandle`:
 
 - `proxy_start(address, port, &proxy) -> bool` binds the listener synchronously (false if the bind fails) and spawns the accept loop on a process-global Tokio runtime. `address` is an IP or a hostname, resolved again for each relay connection.
+- `flow_start(&proxy) -> bool` starts serverless mode's flow server (`src/flow.rs`): binds `FLOW_PORT` on loopback only (127.0.0.1 and ::1), raises the soft fd limit to `min(hard, 8192)`, and caps concurrent flows at `(limit - 64) / 2` (over the cap gets status `Busy`). Each connection is one flow: a request, a status byte, then raw TCP bytes or UDP frames; names resolve on the phone. `ProxyHandle` runs a `Service` (`Relay(Target)` or `Flows(FlowServer)`), so stats and stop are shared; in flow mode `connections` counts open flows (pings excluded). `flow::serve_flows(listeners, limits)` starts one on any listeners, for tests.
 - `proxy_stats(proxy) -> ProxyStats` reads atomics: relays connected now, bytes up, bytes down.
 - `proxy_stop(proxy)` signals the accept loop, blocks until it has exited, and frees the handle. The port is free when it returns, and dropping the loop's `JoinSet` aborts every session. It blocks on the runtime, so call it from outside the runtime (tests are plain `#[test]`, not `#[tokio::test]`, for this reason).
 

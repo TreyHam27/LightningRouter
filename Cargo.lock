@@ -248,6 +248,7 @@ name = "lightning-router"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "libc",
  "lightning-router-frame",
  "tokio",
 ]

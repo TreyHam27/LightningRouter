@@ -1,8 +1,11 @@
 // Jackson Coxson
 
 //! The device end of the link: accepts the Mac relay over TCP and exchanges
-//! its framed datagrams with a UDP target. Swift drives it through the three
-//! `proxy_*` functions at the bottom of this file.
+//! its framed datagrams with a UDP target. Swift drives it through the
+//! `proxy_*` and `flow_start` functions at the bottom of this file. Serverless
+//! mode's flow server lives in [`flow`].
+
+pub mod flow;
 
 use std::{
     ffi::{CStr, c_char},
@@ -15,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-use lightning_router_frame::{DEVICE_PORT, FrameReader, FrameWriter, MAX_DATAGRAM};
+use lightning_router_frame::{DEVICE_PORT, FLOW_PORT, FrameReader, FrameWriter, MAX_DATAGRAM};
 use tokio::{
     net::{
         TcpListener, TcpStream, UdpSocket, lookup_host,
@@ -47,17 +50,17 @@ pub struct ProxyStats {
 }
 
 #[derive(Default)]
-struct Counters {
-    connections: AtomicU64,
-    bytes_up: AtomicU64,
-    bytes_down: AtomicU64,
+pub struct Counters {
+    pub(crate) connections: AtomicU64,
+    pub(crate) bytes_up: AtomicU64,
+    pub(crate) bytes_down: AtomicU64,
 }
 
 /// Counts one relay as connected for as long as it lives.
-struct Connected<'a>(&'a Counters);
+pub(crate) struct Connected<'a>(&'a Counters);
 
 impl<'a> Connected<'a> {
-    fn new(counters: &'a Counters) -> Self {
+    pub(crate) fn new(counters: &'a Counters) -> Self {
         counters.connections.fetch_add(1, Relaxed);
         Self(counters)
     }
@@ -69,9 +72,18 @@ impl Drop for Connected<'_> {
     }
 }
 
-struct Target {
+/// The UDP endpoint a relay-mode proxy forwards to.
+pub struct Target {
     host: String,
     port: u16,
+}
+
+/// What the accept loop runs for each accepted connection.
+pub enum Service {
+    /// WireGuard relay mode: frames to and from one UDP target.
+    Relay(Target),
+    /// Serverless mode: one flow per connection.
+    Flows(flow::FlowServer),
 }
 
 /// A running proxy. Created by `proxy_start`, destroyed by `proxy_stop`.
@@ -82,17 +94,22 @@ pub struct ProxyHandle {
 }
 
 impl ProxyHandle {
-    fn start(listener: std::net::TcpListener, target: Target) -> io::Result<Self> {
-        listener.set_nonblocking(true)?;
-        let listener = {
+    fn start(listeners: Vec<std::net::TcpListener>, service: Service) -> io::Result<Self> {
+        let listeners = {
             let _runtime = RUNTIME.enter();
-            TcpListener::from_std(listener)?
+            listeners
+                .into_iter()
+                .map(|listener| {
+                    listener.set_nonblocking(true)?;
+                    TcpListener::from_std(listener)
+                })
+                .collect::<io::Result<Vec<_>>>()?
         };
         let (shutdown, stopped) = oneshot::channel();
         let counters = Arc::new(Counters::default());
         let accept_loop = RUNTIME.spawn(accept_loop(
-            listener,
-            Arc::new(target),
+            listeners,
+            Arc::new(service),
             counters.clone(),
             stopped,
         ));
@@ -103,7 +120,7 @@ impl ProxyHandle {
         })
     }
 
-    fn stats(&self) -> ProxyStats {
+    pub fn stats(&self) -> ProxyStats {
         ProxyStats {
             connections: self.counters.connections.load(Relaxed),
             bytes_up: self.counters.bytes_up.load(Relaxed),
@@ -113,7 +130,7 @@ impl ProxyHandle {
 
     /// Returns once the listening port is free again, so a proxy can be
     /// restarted straight away. Must be called from outside the runtime.
-    fn stop(self) {
+    pub fn stop(self) {
         let _ = self.shutdown.send(());
         let _ = RUNTIME.block_on(self.accept_loop);
     }
@@ -127,9 +144,22 @@ fn listen(port: u16) -> io::Result<std::net::TcpListener> {
         .or_else(|_| std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)))
 }
 
+/// The next connection from any of the listeners.
+async fn accept_any(listeners: &[TcpListener]) -> io::Result<(TcpStream, SocketAddr)> {
+    std::future::poll_fn(|cx| {
+        for listener in listeners {
+            if let std::task::Poll::Ready(accepted) = listener.poll_accept(cx) {
+                return std::task::Poll::Ready(accepted);
+            }
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
+
 async fn accept_loop(
-    listener: TcpListener,
-    target: Arc<Target>,
+    listeners: Vec<TcpListener>,
+    service: Arc<Service>,
     counters: Arc<Counters>,
     mut stopped: oneshot::Receiver<()>,
 ) {
@@ -139,15 +169,22 @@ async fn accept_loop(
         tokio::select! {
             _ = &mut stopped => return,
             Some(_) = sessions.join_next() => {}
-            accepted = listener.accept() => match accepted {
+            accepted = accept_any(&listeners) => match accepted {
                 Ok((stream, relay)) => {
-                    let target = target.clone();
+                    let service = service.clone();
                     let counters = counters.clone();
                     sessions.spawn(async move {
-                        let _connected = Connected::new(&counters);
-                        match session(stream, &target, &counters).await {
-                            Ok(()) => println!("Relay {relay} disconnected"),
-                            Err(e) => eprintln!("Relay {relay} dropped: {e}"),
+                        match &*service {
+                            Service::Relay(target) => {
+                                let _connected = Connected::new(&counters);
+                                match session(stream, target, &counters).await {
+                                    Ok(()) => println!("Relay {relay} disconnected"),
+                                    Err(e) => eprintln!("Relay {relay} dropped: {e}"),
+                                }
+                            }
+                            Service::Flows(server) => {
+                                server.serve(stream, relay, &counters).await
+                            }
                         }
                     });
                 }
@@ -190,7 +227,7 @@ async fn connect_target(target: &Target) -> io::Result<UdpSocket> {
     Ok(udp)
 }
 
-async fn uplink(
+pub(crate) async fn uplink(
     mut frames: FrameReader<OwnedReadHalf>,
     udp: &UdpSocket,
     counters: &Counters,
@@ -202,7 +239,7 @@ async fn uplink(
     Ok(())
 }
 
-async fn downlink(
+pub(crate) async fn downlink(
     udp: &UdpSocket,
     mut frames: FrameWriter<OwnedWriteHalf>,
     counters: &Counters,
@@ -242,13 +279,41 @@ pub unsafe extern "C" fn proxy_start(
         port,
     };
 
-    match listen(DEVICE_PORT).and_then(|listener| ProxyHandle::start(listener, target)) {
+    match listen(DEVICE_PORT)
+        .and_then(|listener| ProxyHandle::start(vec![listener], Service::Relay(target)))
+    {
         Ok(handle) => {
             unsafe { *proxy = Box::into_raw(Box::new(handle)) };
             true
         }
         Err(e) => {
             eprintln!("Failed to listen on port {DEVICE_PORT}: {e}");
+            false
+        }
+    }
+}
+
+/// Starts the serverless flow server on loopback port `FLOW_PORT` and raises
+/// the open-file limit to fit it.
+///
+/// On success writes the new proxy to `*proxy` and returns true. Returns
+/// false, leaving `*proxy` alone, if `proxy` is null or the port cannot be
+/// bound. `proxy_stats` and `proxy_stop` accept the handle unchanged.
+///
+/// # Safety
+/// `proxy` must be null or valid for a write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn flow_start(proxy: *mut *mut ProxyHandle) -> bool {
+    if proxy.is_null() {
+        return false;
+    }
+    match flow::start(FLOW_PORT) {
+        Ok(handle) => {
+            unsafe { *proxy = Box::into_raw(Box::new(handle)) };
+            true
+        }
+        Err(e) => {
+            eprintln!("Failed to listen on port {FLOW_PORT}: {e}");
             false
         }
     }
@@ -308,7 +373,7 @@ mod tests {
     fn start_proxy() -> (ProxyHandle, SocketAddr) {
         let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
-        let proxy = ProxyHandle::start(listener, echo_target()).unwrap();
+        let proxy = ProxyHandle::start(vec![listener], Service::Relay(echo_target())).unwrap();
         (proxy, address)
     }
 
