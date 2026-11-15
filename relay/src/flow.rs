@@ -1,7 +1,5 @@
 //! Opening flows on the phone (D1) and moving bytes and datagrams through
 //! them. The SOCKS and system modes build on this.
-// The callers arrive in later steps; tests exercise everything here.
-#![allow(dead_code)]
 
 use std::io;
 
@@ -53,6 +51,7 @@ pub async fn splice(
 /// go out as frames, and frames come back as datagrams, until the flow ends
 /// or a socket fails. Each direction has its own loop, because frame reads
 /// and writes are not cancel-safe.
+#[allow(dead_code)] // used by stage B (step 9); SOCKS frames its own flows
 pub async fn pump_udp(flow: impl AsyncRead + AsyncWrite, socket: &UdpSocket) -> io::Result<()> {
     let (flow_in, flow_out) = tokio::io::split(flow);
     let mut frames_out = FrameWriter::new(flow_out);

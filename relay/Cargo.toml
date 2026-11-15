@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 lightning-router-frame = { path = "../frame" }
-tokio = { version = "1.47", features = ["rt", "net", "io-util", "macros", "time"] }
+tokio = { version = "1.47", features = ["rt", "net", "io-util", "macros", "time", "sync"] }
 idevice = { version = "0.1.63", features = ["usbmuxd"] }
 env_logger = { version = "0.11" }
 

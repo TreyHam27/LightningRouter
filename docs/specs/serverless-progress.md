@@ -12,7 +12,7 @@ Read `CLAUDE.md` first for the current architecture and commands.
 - Step 1 (spec) done: `docs/specs/serverless-spec.md` holds the design
   (D1 to D12), the flow-port wire protocol, every test case by name, and
   the build steps 2 to 13 with their models. Read it before any build step.
-- Steps 2 to 4 done: flow codec, phone flow server, relay restructure.
+- Steps 2 to 5 done: flow codec, phone flow server, relay restructure, SOCKS5.
 - Branch `feat/serverless`, based on local `improve/proxy-core` (commit
   `634cf9e`), which is unpublished. `origin` is the upstream author's repo,
   not a fork the user owns: push nothing and open no PR without asking.
@@ -48,9 +48,18 @@ loopback only (D9).
 
 ## Next step
 
-**Step 5: SOCKS5 server on the relay (`socks.rs`, `--socks [ADDR]`). Model: see the spec's step table.**
+**Step 6: stage A on a device (spec "Stage A, on a device"). Needs the user.**
 
-Read the spec's "Stage A" section and step 5 row. Hooks already in place: `flow::open_flow`, `splice`, `pump_udp`, `device::Cache::watch` (spawn it in `--socks` mode), and the CLI match in `relay/src/main.rs`.
+Gap: `Tunnel.swift` never calls `flow_start` (grep finds nothing), and step 11
+is the Tunnel mode picker. Before the device run, a Sonnet thread must add a
+minimal way to start flow mode in the app (spec step 11 / Stage C), or the
+user tests with a temporary build. Check the spec's D-A1 setup text first.
+
+The user must: run `make`, build and install the app from Xcode, start it with
+the flow server, turn Wi-Fi off on the Mac, run
+`cd relay && cargo run --release -- --socks`, then do D-A1 to D-A4 from the
+spec and report results. After that a Sonnet thread can finish the
+`examples/flood.rs`, the D1 gate decision and the README section.
 
 ## Commands
 
@@ -62,6 +71,7 @@ cd relay && cargo run --release
 
 ## Finished steps
 
+- Step 5: `relay/src/socks.rs`, hand-written RFC 1928 (no new crate): CONNECT, UDP ASSOCIATE, `--socks [ADDR]`; `Addr` gained `Hash`; 18 relay tests. The idle-timeout test uses a 300 ms real timeout, not `time::pause` (paused time would skip socket waits).
 - Step 4: relay split into `device.rs`, `wireguard.rs`, `flow.rs`; 7 relay tests, `make test` and clippy clean.
 - Step 3: phone flow server (`src/flow.rs`, `Service`, `flow_start`, rlib), 15 tests, `make` ok.
 - Step 2: shared flow codec (`frame/src/flow.rs`, `FLOW_PORT`), 8 tests.

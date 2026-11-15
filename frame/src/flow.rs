@@ -21,7 +21,7 @@ pub enum Kind {
 }
 
 /// Where a flow goes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Addr {
     V4(Ipv4Addr),
     V6(Ipv6Addr),
