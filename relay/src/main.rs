@@ -5,6 +5,7 @@
 mod device;
 mod flow;
 mod socks;
+mod system;
 mod wireguard;
 
 #[tokio::main(flavor = "current_thread")]
