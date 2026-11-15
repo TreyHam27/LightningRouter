@@ -72,7 +72,7 @@ A signature change here needs a `make` rebuild so the regenerated header reaches
 
 ## App (`LightningRouter/`)
 
-`Tunnel.swift` is the only caller of the FFI: a main-actor `@Observable` model that owns the `ProxyHandle`, polls `proxy_stats` once a second for the status line, and starts and stops the background service with the proxy. `ContentView.swift` is the view over it.
+`Tunnel.swift` is the only caller of the FFI: a main-actor `@Observable` model that owns the `ProxyHandle`, polls `proxy_stats` once a second for the status line, and starts and stops the background service with the proxy. `ContentView.swift` is the view over it, with a mode picker (`tunnelMode`). `Tunnel.start(mode:)` takes a `Tunnel.Start`: WireGuard carries host and port, serverless calls `flow_start`.
 
 iOS suspends a backgrounded app, which would stall the tunnel, so `BackgroundHelper/` (adapted from iTorrent) keeps the app alive. `BackgroundService` is a main-actor facade over two strategies chosen in the UI: `AudioBackgroundService` loops the bundled `silence.mp3`, and `LocationBackgroundService` runs background location updates. The facade tracks `isRunning` itself, because the audio strategy's own `isRunning` is false for a moment after `start()`. The matching `UIBackgroundModes` and location usage strings live in `LightningRouter/Info.plist`.
 
@@ -83,6 +83,14 @@ iOS suspends a backgrounded app, which would stall the tunnel, so `BackgroundHel
 - `wireguard.rs`: binds UDP 3400 once, then loops: connect to the app, `bridge` until the link drops, retry. Replies go to whichever address last sent a datagram.
 - `device.rs`: device discovery (USB preferred, network as fallback; listed on every attempt because usbmuxd gives a replugged device a new ID), `connect`, and the `Cache` of the phone's state that flows use (a `watch` task refreshes it every second with a PING; `Reporter` prints a change once). `LR_DEVICE_ADDR=host:port` bypasses usbmuxd for flow mode; WireGuard mode ignores it only in the sense that it has no flow port to point it at.
 - `flow.rs`: `open_flow(cache, request)` opens one flow on `FLOW_PORT` (a failed connect marks the cache stale and fails at once), plus `splice` (TCP) and `pump_udp` (UDP frames). Nothing calls these from the binary until the SOCKS step, so the module is `allow(dead_code)`.
+
+### `system/` (whole-system mode, not yet wired to the CLI)
+
+- `setup.rs`: the root phase (`prepare()`): utun, SCDynamicStore temporary keys, privilege drop. Teardown is the utun fd closing plus the session closing. `setup.rs` and `stub.rs` must stay free of `crate::` items, because `examples/system_spike.rs` includes them with `#[path]`; the example needs sudo.
+- `stub.rs`: stub stack answering only DNS, for the spike.
+- `fakedns.rs`: pure DNS responder and fake-IP pool (198.18.0.0/15, D4).
+- `stack.rs`: ipstack glue, `run(device, cache, Options)`. It needs a multi-thread runtime (`main.rs` is `current_thread`; `--system` must build its own after the privileged phase). ipstack 1.0.1 quirks: no TCP half-close (a reply after the client's FIN is lost), a parked shutdown never wakes (`Closing` re-polls every 20 ms), and dropping a TCP stream calls `block_in_place`.
+- The repo is not rustfmt-clean; do not run `cargo fmt` over untouched files.
 
 ## Not yet built
 

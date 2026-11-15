@@ -46,35 +46,20 @@ before the runtime starts, then privileges drop, and teardown is the utun
 fd plus the SCDynamicStore session closing (D8); the flow server binds
 loopback only (D9).
 
-## Parallel tracks
+## Tracks (merged into `feat/serverless`, step 9m done)
 
-Steps that do not depend on each other run in parallel, each on its own
-branch and worktree, branched from `feat/serverless` at `9657647`. A track
-touches only its own files and leaves this file and `CLAUDE.md` alone; its
-status file lives on its own branch and says when the track is done.
-
-| Track | Branch | Steps | Status file |
-|---|---|---|---|
-| net | `feat/serverless-net` | 8 (fakedns, Sonnet), then 9 (stack, Opus medium) | `docs/specs/serverless-track-net.md` |
-| core | `feat/serverless-core` | 7a: `system/setup.rs`, its unit tests, the DNS-only stub stack; no privileged runs (Opus high) | `docs/specs/serverless-track-core.md` |
-| app | `feat/serverless-app` | 11 except C2 (Sonnet) | `docs/specs/serverless-track-app.md` |
-
-Steps 7a, 8, 9 and 11 are never handed off from the main line.
+- app (step 11 except C2): `Tunnel.Start`, mode picker, status text.
+- core (7a): `relay/src/system/setup.rs`, `stub.rs`, `examples/system_spike.rs`; 7b not run. Its runbook (M1, M2, M3, M7, M8 and the fallbacks per failure) is in git history at `feat/serverless-core`: `docs/specs/serverless-track-core.md`.
+- net (8, 9): `fakedns.rs`, `stack.rs`; deps `ipstack`, `tun-rs`, `system-configuration`.
+- Merged state: `make test` all green (21 + 16 + 45 relay), clippy clean in all three crates, `make` ok.
+- Open item from the app track: C1 (simulator run) not done; C2 (device: picker persists, disabled while on, WireGuard still works) needs a device.
 
 ## Next step
 
-The main line (this worktree) is idle until tracks finish. In order:
+Tracks are merged. In order:
 
-1. **Step 9m: merge finished tracks into `feat/serverless`. Model: Sonnet
-   medium.** Merge a track once its status file says it is done; the app
-   track can be merged alone, ahead of the others, to unblock step 6.
-   Expect small conflicts in `relay/Cargo.toml`, `relay/Cargo.lock`
-   (regenerate it), `relay/src/main.rs` and `relay/src/system/mod.rs`. Fold
-   each merged status file into this file and `CLAUDE.md`, delete it, then
-   run `make test` and clippy in each crate.
-2. **Step 6: stage A on a device. Needs the user.** Needs the app track
-   merged first, because the app cannot start flow mode until step 11 is
-   in. The user must: run `make`, build and install the app from Xcode,
+1. Step 9m (merge tracks) done.
+2. **Step 6: stage A on a device. Needs the user.** The app track is merged, so the app can start flow mode. The user must: run `make`, build and install the app from Xcode,
    start it in Serverless mode, turn Wi-Fi off on the Mac, run
    `cd relay && cargo run --release -- --socks`, then do D-A1 to D-A4 from
    the spec and report results. After that a Sonnet thread finishes
