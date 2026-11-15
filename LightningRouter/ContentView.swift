@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @AppStorage("tunnelMode") private var tunnelMode: Tunnel.Mode = .wireGuard
     @AppStorage("lastTargetIP") private var targetIP: String = "1.1.1.1"
     @AppStorage("lastTargetPort") private var targetPort: Int = 51820
     @AppStorage("backgroundMode") private var backgroundMode: BackgroundService.Mode = .audio
@@ -26,7 +27,17 @@ struct ContentView: View {
                 .font(.title2)
                 .bold()
 
+            Picker("Mode", selection: $tunnelMode) {
+                ForEach(Tunnel.Mode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .disabled(tunnel.isOn)
+
             // The target is fixed for the life of a tunnel.
+            if tunnelMode == .wireGuard {
             HStack {
                 TextField("IP address or hostname", text: $targetIP)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -47,6 +58,7 @@ struct ContentView: View {
                     }
             }
             .disabled(tunnel.isOn)
+            }
 
             Toggle("Enable Tunnel", isOn: tunnelIsOn)
                 .padding(.horizontal)
@@ -100,7 +112,13 @@ struct ContentView: View {
             tunnel.isOn
         } set: { enable in
             if enable {
-                tunnel.start(host: targetIP.trimmingCharacters(in: .whitespaces), port: targetPort)
+                switch tunnelMode {
+                case .wireGuard:
+                    tunnel.start(mode: .wireGuard(
+                        host: targetIP.trimmingCharacters(in: .whitespaces), port: targetPort))
+                case .serverless:
+                    tunnel.start(mode: .serverless)
+                }
             } else {
                 tunnel.stop()
             }
@@ -115,9 +133,13 @@ struct ContentView: View {
         switch tunnel.status {
         case .off:
             "Off"
+        case .waitingForRelay where tunnel.mode == .serverless:
+            "Waiting for the Mac"
         case .waitingForRelay:
             "Waiting for the relay on your Mac"
-        case .relaying(let up, let down):
+        case .relaying(let n, let up, let down) where tunnel.mode == .serverless:
+            "Serverless: \(n) connection\(n == 1 ? "" : "s") · ↓ \(byteCount(down)) ↑ \(byteCount(up))"
+        case .relaying(_, let up, let down):
             "Relaying · ↓ \(byteCount(down)) ↑ \(byteCount(up))"
         }
     }
