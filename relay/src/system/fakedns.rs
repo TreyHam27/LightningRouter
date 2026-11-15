@@ -5,7 +5,7 @@
 //! `Forward` queries to the upstream resolver, and ignores `Drop`.
 //! It also owns the fake-IP pool, which maps names to addresses in
 //! 198.18.0.3 to 198.19.255.254 and back.
-#![allow(dead_code)] // wired up by `system/stack.rs`
+#![allow(dead_code)] // `ROUTER_ADDR` and `DNS_ADDR` are for the `--system` setup
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::Ipv4Addr;
