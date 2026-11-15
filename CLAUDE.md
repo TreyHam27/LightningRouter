@@ -27,7 +27,7 @@ WireGuard client ──UDP──> relay (Mac, 0.0.0.0:3400)
 
 UDP datagrams ride the usbmuxd TCP stream as **frames**: a `u16` little-endian length, then the datagram. A zero-length frame, or the stream ending on a frame boundary, means the peer is done. `frame/src/lib.rs` is the single source of truth for the frame and for the port numbers (`DEVICE_PORT`, `RELAY_PORT`, `FLOW_PORT`). `frame/src/flow.rs` is the serverless-mode flow-port codec (`Request`, `Status`; spec in `docs/specs/serverless-spec.md`); the phone's flow server (`src/flow.rs`) uses it, the relay does not yet.
 
-Both ends run the same shape: split the stream, then run one loop per direction under a `select!` (`session` in `src/lib.rs`, `bridge` in `relay/src/main.rs`). `FrameReader::next` and `FrameWriter::send` are not cancel-safe, so keep each inside its own loop; a `select!` branch that reads or writes a frame directly would desynchronise the stream when the other branch wins.
+Both ends run the same shape: split the stream, then run one loop per direction under a `select!` (`session` in `src/lib.rs`, `bridge` in `relay/src/wireguard.rs`). `FrameReader::next` and `FrameWriter::send` are not cancel-safe, so keep each inside its own loop; a `select!` branch that reads or writes a frame directly would desynchronise the stream when the other branch wins.
 
 ## Commands
 
@@ -76,9 +76,13 @@ A signature change here needs a `make` rebuild so the regenerated header reaches
 
 iOS suspends a backgrounded app, which would stall the tunnel, so `BackgroundHelper/` (adapted from iTorrent) keeps the app alive. `BackgroundService` is a main-actor facade over two strategies chosen in the UI: `AudioBackgroundService` loops the bundled `silence.mp3`, and `LocationBackgroundService` runs background location updates. The facade tracks `isRunning` itself, because the audio strategy's own `isRunning` is false for a moment after `start()`. The matching `UIBackgroundModes` and location usage strings live in `LightningRouter/Info.plist`.
 
-## Relay (`relay/src/main.rs`)
+## Relay (`relay/src/`)
 
-Binds UDP 3400 once, then loops: list usbmuxd devices (USB preferred, network as fallback), connect to the app, bridge until the link drops, retry. Devices are listed on every attempt because usbmuxd gives a replugged device a new ID. Replies from the app go to whichever address last sent a datagram.
+`main.rs` is the CLI (today only WireGuard mode, no arguments) over three modules. The relay dev-depends on the root crate (an rlib), so its tests run the real phone flow server in-process via `lightning_router::flow::serve_flows`.
+
+- `wireguard.rs`: binds UDP 3400 once, then loops: connect to the app, `bridge` until the link drops, retry. Replies go to whichever address last sent a datagram.
+- `device.rs`: device discovery (USB preferred, network as fallback; listed on every attempt because usbmuxd gives a replugged device a new ID), `connect`, and the `Cache` of the phone's state that flows use (a `watch` task refreshes it every second with a PING; `Reporter` prints a change once). `LR_DEVICE_ADDR=host:port` bypasses usbmuxd for flow mode; WireGuard mode ignores it only in the sense that it has no flow port to point it at.
+- `flow.rs`: `open_flow(cache, request)` opens one flow on `FLOW_PORT` (a failed connect marks the cache stale and fails at once), plus `splice` (TCP) and `pump_udp` (UDP frames). Nothing calls these from the binary until the SOCKS step, so the module is `allow(dead_code)`.
 
 ## Not yet built
 

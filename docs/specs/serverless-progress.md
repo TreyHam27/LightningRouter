@@ -12,7 +12,7 @@ Read `CLAUDE.md` first for the current architecture and commands.
 - Step 1 (spec) done: `docs/specs/serverless-spec.md` holds the design
   (D1 to D12), the flow-port wire protocol, every test case by name, and
   the build steps 2 to 13 with their models. Read it before any build step.
-- Frame-crate flow codec (step 2) and phone flow server (step 3) exist.
+- Steps 2 to 4 done: flow codec, phone flow server, relay restructure.
 - Branch `feat/serverless`, based on local `improve/proxy-core` (commit
   `634cf9e`), which is unpublished. `origin` is the upstream author's repo,
   not a fork the user owns: push nothing and open no PR without asking.
@@ -48,15 +48,9 @@ loopback only (D9).
 
 ## Next step
 
-**Step 4: relay restructure. Model: Sonnet medium. About 40 tool calls.**
+**Step 5: SOCKS5 server on the relay (`socks.rs`, `--socks [ADDR]`). Model: see the spec's step table.**
 
-Split `relay/src/main.rs` into `device.rs` (D11, `LR_DEVICE_ADDR`),
-`wireguard.rs` (today's bridge, moved unchanged with its tests) and `flow.rs`
-(`open_flow`, TCP splice, UDP pump), plus the CLI; tests `device_cache_*`.
-The relay dev-depends on the root crate (`lightning-router`, now an rlib) and
-starts the real flow server with `lightning_router::flow::serve_flows`.
-Done when `make test` and clippy pass. Then update `CLAUDE.md`, shrink this
-step to one line, set "Next step" to step 5, commit, and hand off.
+Read the spec's "Stage A" section and step 5 row. Hooks already in place: `flow::open_flow`, `splice`, `pump_udp`, `device::Cache::watch` (spawn it in `--socks` mode), and the CLI match in `relay/src/main.rs`.
 
 ## Commands
 
@@ -68,6 +62,7 @@ cd relay && cargo run --release
 
 ## Finished steps
 
+- Step 4: relay split into `device.rs`, `wireguard.rs`, `flow.rs`; 7 relay tests, `make test` and clippy clean.
 - Step 3: phone flow server (`src/flow.rs`, `Service`, `flow_start`, rlib), 15 tests, `make` ok.
 - Step 2: shared flow codec (`frame/src/flow.rs`, `FLOW_PORT`), 8 tests.
 - Step 1: spec written (`serverless-spec.md`). Details in `serverless-log.md`.
