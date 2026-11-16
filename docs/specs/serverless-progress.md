@@ -59,11 +59,7 @@ loopback only (D9).
 Tracks are merged. In order:
 
 1. Step 9m (merge tracks) done.
-2. **Step 6: stage A on a device. Needs the user.** The app track is merged, so the app can start flow mode. The user must: run `make`, build and install the app from Xcode,
-   start it in Serverless mode, turn Wi-Fi off on the Mac, run
-   `cd relay && cargo run --release -- --socks`, then do D-A1 to D-A4 from
-   the spec and report results. After that a Sonnet thread finishes
-   `examples/flood.rs`, the D1 gate decision and the README section.
+2. Step 6 (stage A on a device) done; results below.
 3. **Step 7b: the privileged runs M1, M2, M3, M7 and M8, from the core
    track's runbook. Model: Opus high. Needs the user** for sudo, and needs
    every other thread on this Mac idle, because the runs change its routes
@@ -80,6 +76,11 @@ cd relay && cargo run --release
 
 ## Finished steps
 
+- Step 6: stage A on an iPhone 14 over USB, run 2026-11-15. Signing: the user's own team via the gitignored `LightningRouter/Signing.xcconfig` (bundle ID `com.treyhamilton.LightningRouter`). `relay/examples/flood.rs` and a README section added.
+  - D-A1 passed, run differently from the spec: the Mac's Wi-Fi stayed on, since turning it off would cut the agent's own connection. `curl --socks5-hostname 127.0.0.1:1080 https://ifconfig.me` returned 146.70.202.190 (AS9009 M247, a hosting provider, so the phone may have a VPN or Private Relay on, unchecked); a direct curl returned 73.233.211.106 (Comcast). The addresses differ, so traffic leaves through the phone. Safari was not tried.
+  - D-A2: the D1 gate **fails as written**. One TCP flow opens in about 65 ms; a ping flow (usbmuxd connect plus phone accept only) in 1.7 ms (8 flows: 3.4 ms p50; 32: 10 ms p50). TCP flows opened at once stall in about 1 s steps (1, 3, 5, 7 s, like connect retries): 8 flows p50 1.07 s, 16 p50 1.1 s, 256 gave 75 to 86 successes with p50 1.4 to 3.3 s and p99 about 7.2 s (statuses Failed and TimedOut). The stall is the same for 1.1.1.1:443, 8.8.8.8:53 and example.com:80, so it comes from the phone's outbound connects, not usbmuxd, and yamux would probably not fix it. 256 ping flows: 232 succeeded, the rest Failed. Decision for the user: spec says insert step 6b (`tokio-yamux`); my recommendation is to find the phone-side connect stall first (cellular path, the 1 s steps) and revisit yamux after.
+  - D-A3 passed: every USB flow reached the phone flow server from 127.0.0.1 (11 flows seen), so D9 holds. The temporary log is removed; the phone was rebuilt and reinstalled clean.
+  - D-A4 passed: after an unplug and replug the relay logged `Waiting: no device is connected`, then `Connected to the app`, same process, and SOCKS curls returned 200 straight away. Recovery time was not timed exactly (the log has no timestamps); the relay polls every second.
 - Step 5: `relay/src/socks.rs`, hand-written RFC 1928 (no new crate): CONNECT, UDP ASSOCIATE, `--socks [ADDR]`; `Addr` gained `Hash`; 18 relay tests. The idle-timeout test uses a 300 ms real timeout, not `time::pause` (paused time would skip socket waits).
 - Step 4: relay split into `device.rs`, `wireguard.rs`, `flow.rs`; 7 relay tests, `make test` and clippy clean.
 - Step 3: phone flow server (`src/flow.rs`, `Service`, `flow_start`, rlib), 15 tests, `make` ok.

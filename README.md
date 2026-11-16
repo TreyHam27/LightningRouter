@@ -45,6 +45,37 @@ shows whether the relay is connected and how much it has carried.
 
 Profit.
 
+## Serverless mode (SOCKS5, experimental)
+
+Serverless mode needs no WireGuard endpoint. The phone opens each
+connection itself, so traffic leaves through the phone's cellular data.
+
+1. In the app, choose **Serverless** and turn the tunnel on.
+2. Run the relay with a SOCKS5 proxy on `127.0.0.1:1080`:
+
+   ```sh
+   cd relay
+   cargo run --release -- --socks
+   ```
+
+3. Point an app or the macOS proxy settings at `127.0.0.1:1080`. To check:
+
+   ```sh
+   curl --socks5-hostname 127.0.0.1:1080 https://ifconfig.me
+   ```
+
+   Use `--socks5-hostname` so names are resolved on the phone.
+
+The relay waits for the phone and reconnects after an unplug and replug,
+with no restart. Whole-system mode (routing everything, with no per-app
+proxy settings) is not wired up yet.
+
+Measured on an iPhone 14 over USB: a single flow opens in about 65 ms.
+Many TCP flows opened at once are slow, because each open waits on the
+phone's outbound connect: 16 at once take about 1 s each, and only about a
+third of 256 succeed. Run `cargo run --release --example flood [N]
+[host:port|ping]` in `relay/` to measure it on your own phone.
+
 ## Tests
 
 ```sh
