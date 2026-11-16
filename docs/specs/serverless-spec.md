@@ -38,15 +38,26 @@ DNS answers, and the system setup.
 - **Small phone code:** the phone stays one task per accepted connection,
   the same shape as `accept_loop` today.
 - **No new dependency:** there is no mux crate to adopt.
-- **Cost, unmeasured:** each flow pays one usbmuxd connect, and nobody has
-  published a figure for it. No connection limit is documented either; the
-  usbmuxd README says only that it "supports multiple connections... in
-  parallel".
-- **Gate:** step 6 measures both on a real device. If p50 flow-open latency
-  is over 20 ms, or fewer than 256 concurrent flows succeed, add a
-  multiplexed transport with `tokio-yamux` (0.3.20, MIT) behind the same
-  `open_flow` function. The flow protocol below stays the same either way,
-  because yamux streams would carry it unchanged.
+- **Cost, measured (step 6a):** a ping flow (usbmuxd connect plus the
+  phone's accept, no outbound connect) opens in about 2.5 ms p50, and 512
+  held flows all succeed. No usbmuxd connection limit was hit. macOS
+  usbmuxd's accept queue does overflow on a burst ("device socket io
+  failed"), so the relay allows at most 32 usbmuxd connects in flight
+  (`USBMUXD_CONNECTS` in `relay/src/device.rs`). Later connects wait
+  instead of failing.
+- **Gate (reworded in step 6a, passed):** the gate measures the transport,
+  not the network beyond the phone. With ping flows, p50 open latency must
+  be at most 20 ms, and 256 flows opened at once must all succeed. Otherwise
+  add a multiplexed transport with `tokio-yamux` (0.3.20, MIT) behind the
+  same `open_flow` function. The flow protocol below stays the same either
+  way, because yamux streams would carry it unchanged. TCP flows to real
+  hosts are recorded, but they do not decide the gate: their latency is the
+  path's round trip, and their limits are the network's (below).
+- **Network limits that yamux would not change:** on the user's cellular
+  carrier, about 318 outbound TCP connections can exist at once. Flows past
+  that time out, and closed flows still count toward the cap for under a
+  minute. On Wi-Fi, 600 succeeded. A VPN on the phone added connect stalls
+  in 1 s steps, even at 8 flows.
 
 ### D2. The phone speaks a small custom flow protocol, not SOCKS5
 
@@ -543,9 +554,10 @@ dev-dependency and `LR_DEVICE_ADDR` or an injected address.
 - **D-A1:** Safari with the macOS SOCKS proxy set to `127.0.0.1:1080`, over
   USB with Wi-Fi off on the Mac. Pages load, and `curl --socks5-hostname
   127.0.0.1:1080 https://ifconfig.me` shows the carrier's IP.
-- **D-A2:** opening 256 concurrent flows (a small script in
-  `relay/examples/flood.rs`) records the p50 and p99 open latency, and how
-  many succeed. This is the D1 gate.
+- **D-A2:** `relay/examples/flood.rs` opens N concurrent flows and records
+  p50 and p99 open latency and how many succeed. 256 ping flows at once
+  are the D1 gate. TCP flows to real hosts are recorded alongside, as
+  network figures.
 - **D-A3:** log the peer address that the flow server sees for USB flows,
   then remove the log. This is the D9 confirmation.
 - **D-A4:** unplugging and replugging recovers within 2 s, with no relay

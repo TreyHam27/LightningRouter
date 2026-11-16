@@ -18,9 +18,14 @@ use lightning_router_frame::{
     FLOW_PORT,
     flow::{Request, Status, read_status, write_request},
 };
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, sync::Semaphore};
 
 const USBMUXD_TAG: u32 = 69;
+/// usbmuxd connects allowed in flight at once. macOS usbmuxd's accept queue
+/// overflows on a burst (256 at once lost about a third with "device socket
+/// io failed", step 6a), so later connects wait here instead of failing.
+/// Only the connect handshake holds a permit, not the flow.
+static USBMUXD_CONNECTS: Semaphore = Semaphore::const_new(32);
 /// How often the watcher looks for the device again.
 const POLL: Duration = Duration::from_secs(1);
 
@@ -100,7 +105,9 @@ pub async fn connect(device: &Device, port: u16) -> Result<Box<dyn ReadWrite>, S
         }
         Device::Usbmuxd {
             device_id, udid, ..
-        } => UsbmuxdAddr::default()
+        } => {
+            let _permit = USBMUXD_CONNECTS.acquire().await.expect("never closed");
+            UsbmuxdAddr::default()
             .connect(USBMUXD_TAG)
             .await
             .map_err(|e| format!("usbmuxd is unreachable ({e})"))?
@@ -108,7 +115,8 @@ pub async fn connect(device: &Device, port: u16) -> Result<Box<dyn ReadWrite>, S
             .await
             .map_err(|e| format!("enable the tunnel in the app on {udid} ({e})"))?
             .get_socket()
-            .ok_or_else(|| format!("usbmuxd gave no connection to {udid}")),
+            .ok_or_else(|| format!("usbmuxd gave no connection to {udid}"))
+        }
     }
 }
 
