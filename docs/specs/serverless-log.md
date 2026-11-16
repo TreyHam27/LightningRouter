@@ -74,3 +74,46 @@ starts, prints successes per block of 32 and the last usbmuxd failure).
   waking up.
 - **Outcome:** D1 gate reworded to measure the transport (ping flows) and
   passed; no yamux. Relay `cargo test` 45 passed, clippy clean.
+
+## Step 7b: privileged spike runs, stub stack (2026-11-15)
+
+The user ran `lr7b.sh short && lr7b.sh full` in their own Terminal (the
+password never went through the agent). It is a time-boxed wrapper around
+`examples/system_spike` with a 20 s or 120 s watchdog and an exit trap that
+kills the spike and removes any LightningRouter keys left behind. It was not
+committed. The Mac had Wi-Fi (en0, 10.0.0.1, native IPv6) and Tailscale (utun4).
+
+- **Attempt 1, a harness bug:** a script's `&` jobs start with SIGINT
+  ignored, and the spike inherits that through sudo's exec, so `kill -INT`
+  did nothing. The exit trap's `kill -9` ended it, and the Mac was restored
+  within 1 s with no key removal needed: an unplanned M3 pass. Fixed by
+  starting it through `perl -e '$SIG{INT}="DEFAULT"; exec @ARGV' sudo …`.
+  Step 10 needs the same care: `sudo relay --system &` from a script cannot
+  be stopped with Ctrl-C or SIGINT.
+- **M1 pass:** `PrimaryService : LightningRouter-<pid>`, `PrimaryInterface :
+  utun11`, `Router : 198.18.0.1`; `route -n get default` gives `utun11`;
+  en0's default became interface-scoped (`UGScIg`). Resolver #1 is
+  Tailscale's supplemental one, and resolver #2, the first non-supplemental
+  resolver, is `198.18.0.2`. `ps` shows the sudo user; there are exactly 3
+  keys; the fd limit is 8192. `dig @198.18.0.2` gives `198.18.0.3`.
+  **System-resolver lookups (dscacheutil, plain dig) returned nothing:**
+  mDNSResponder was still querying the old servers (75.75.75.75, 75.75.76.76)
+  2 to 4 s after start. Cloned host routes show those packets going into the
+  utun, and the stub drops anything not sent to 198.18.0.2. This is harmless
+  for the real stack, which answers port 53 at any destination (`stack.rs`),
+  but step 10's M1 must check a system-resolver lookup.
+- **M2 pass:** after `kill -INT`, non-W routes, `scutil --dns` and `ifconfig -l`
+  matched the saved copies within 2 s, and no keys were left.
+- **M3 pass:** `kill -9` sent without sudo succeeded, which confirms the
+  privilege drop; everything was restored within 5 s with no keys left.
+  **Temporary keys do not survive SIGKILL.**
+- **M7 pass:** started straight after M3, it had exactly 3 keys, all for the
+  new pid.
+- **M8:** IPv6 is **not captured and not leaked**. There is no unscoped IPv6
+  default at all while the service is primary (no default through utun11, and
+  en0's is `UGcIg`); `ping6 2606:4700:4700::1111` gives "No route to host".
+  Decision: stage B is IPv4-only (D6), and the IPv6 key stays because it is
+  what stops the leak. IPv6 capture (`::/1` plus `8000::/1`, or a `Router`
+  IPMonitor accepts) is deferred and is not a stage B item.
+- **D8:** both assumptions confirmed; neither fallback is needed. No code
+  changed.

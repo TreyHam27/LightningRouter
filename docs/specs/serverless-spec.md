@@ -205,12 +205,17 @@ MIT/Apache). The high-level wrapper has no temporary-value call, so
 `SCDynamicStoreAddTemporaryValue` is called through
 `system-configuration-sys` in one small `unsafe` function.
 
-Two things are **unverified** and are verified first, in step 7:
+Both assumptions were **confirmed in step 7b** (macOS 27, Wi-Fi and Tailscale
+up; details in the log):
 
-- whether temporary values are removed when the process is SIGKILLed;
-- whether IPMonitor honours `OverridePrimary` for a State-only service.
+- Temporary values go when the process is SIGKILLed: after `kill -9`, the keys,
+  the utun and its routes were gone within 1 s, and routes and DNS matched the
+  saved copies.
+- IPMonitor honours `OverridePrimary` for a State-only service: `PrimaryService`
+  became `LightningRouter-<pid>`, the default route went through utunN, and
+  `198.18.0.2` became the first non-supplemental resolver.
 
-The fallbacks, in order:
+So neither fallback is used. They stay here in case a later macOS changes:
 
 1. If the default route is not installed, add `0.0.0.0/1` and `128.0.0.0/1`
    (and `::/1`, `8000::/1`) with `-interface utunN`. They die with the
@@ -616,6 +621,11 @@ Save `netstat -rn` and `scutil --dns` before each check, and compare.
 - **M7:** start again straight after M3. There is no stale service, and
   `scutil` shows exactly one `LightningRouter-*` key set.
 - **M8:** IPv6. Note whether IPv6 traffic is captured, then apply D6.
+  Step 7b: not captured, and not leaked either. IPMonitor installs no IPv6
+  default through the utun, and it scopes en0's IPv6 default (flag `I`), so
+  global IPv6 fails at once with "No route to host". Stage B ships IPv4-only
+  (D6). Keep the IPv6 key: without it, en0 stays primary for IPv6 and IPv6
+  leaks over Wi-Fi.
 
 ### Stage C, app
 
