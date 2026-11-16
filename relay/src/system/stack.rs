@@ -17,8 +17,6 @@
 //! Dropping an `IpStackTcpStream` calls `block_in_place`, so `run` needs a
 //! multi-thread Tokio runtime.
 
-#![allow(dead_code)] // wired up by the `--system` CLI step
-
 use std::{
     future::Future,
     io,
@@ -421,8 +419,10 @@ mod tests {
         }
     }
 
-    /// What came out of the stack, parsed.
+    /// What came out of the stack, parsed. The TCP addresses are only read
+    /// through `Debug`, in assertion messages.
     #[derive(Debug)]
+    #[allow(dead_code)]
     enum Seen {
         Tcp {
             src: SocketAddrV4,
