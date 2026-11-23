@@ -13,9 +13,10 @@ Read `CLAUDE.md` first for the current architecture and commands.
   (D1 to D12), the flow-port wire protocol, every test case by name, and
   the build steps 2 to 13 with their models. Read it before any build step.
 - Steps 2 to 5 done: flow codec, phone flow server, relay restructure, SOCKS5.
-- Branch `feat/serverless`, based on local `improve/proxy-core` (commit
-  `634cf9e`), which is unpublished. `origin` is the upstream author's repo,
-  not a fork the user owns: push nothing and open no PR without asking.
+- All work through step 10 is merged into `master` and pushed to `origin`,
+  the user's fork (TreyHam27/LightningRouter). `upstream` is the original
+  author's repo (jkcoxson), read-only: open no PR there without asking.
+  New work branches from `origin/master` in a fresh worktree.
 - Baseline is green: `make test` (16 tests), `make`, and the simulator
   compile-check in `CLAUDE.md` all pass.
 
@@ -47,10 +48,10 @@ fd plus the SCDynamicStore session closing (D8, confirmed in 7b, no fallback);
 stage B is IPv4-only, and the IPv6 key stays to stop IPv6 leaking (D6, M8); the flow server binds
 loopback only (D9).
 
-## Tracks (merged into `feat/serverless`, step 9m done)
+## Tracks (merged into `master` via step 9m done)
 
 - app (step 11 except C2): `Tunnel.Start`, mode picker, status text.
-- core (7a, 7b): `relay/src/system/setup.rs`, `stub.rs`, `examples/system_spike.rs`. The original runbook is in git history at `feat/serverless-core`: `docs/specs/serverless-track-core.md`.
+- core (7a, 7b): `relay/src/system/setup.rs`, `stub.rs`, `examples/system_spike.rs`. The original runbook is in git history at commit `8c1016d`: `docs/specs/serverless-track-core.md`.
 - net (8, 9): `fakedns.rs`, `stack.rs`; deps `ipstack`, `tun-rs`, `system-configuration`.
 - Merged state: `make test` all green (21 + 16 + 45 relay), clippy clean in all three crates, `make` ok.
 - Open item from the app track: C1 (simulator run) not done; C2 (device: picker persists, disabled while on, WireGuard still works) needs a device.
